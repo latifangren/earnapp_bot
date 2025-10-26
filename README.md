@@ -23,7 +23,7 @@ Bot Telegram untuk mengontrol EarnApp di multiple device secara remote melalui S
 
 ### 1. Clone Repository
 ```bash
-git clone https://github.com/latifangren/earnapp_bot
+git clone https://github.com/latifangren/earnapp_bot.git
 cd earnapp_bot
 ```
 
@@ -75,7 +75,7 @@ sudo mkdir -p /srv/earnapp_bot
 cd /srv/earnapp_bot
 
 # Clone repository
-sudo git clone https://github.com/latifangren/earnapp_bot
+sudo git clone https://github.com/latifangren/earnapp_bot.git
 
 # Buat virtual environment
 python3 -m venv venv
