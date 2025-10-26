@@ -5,6 +5,13 @@
 
 echo "🤖 Memulai instalasi EarnApp Bot..."
 
+# Cek apakah file bot ada
+if [ ! -f "earnapp_bot.py" ]; then
+    echo "❌ File earnapp_bot.py tidak ditemukan!"
+    echo "Pastikan Anda menjalankan script ini dari direktori yang berisi file bot."
+    exit 1
+fi
+
 # Update sistem
 echo "📦 Mengupdate sistem..."
 apt update && apt upgrade -y
@@ -20,6 +27,17 @@ apt install -y libffi-dev libssl-dev
 # Buat direktori untuk bot
 echo "📁 Membuat direktori bot..."
 mkdir -p /srv/earnapp_bot
+
+# Salin file dari direktori saat ini ke /srv/earnapp_bot
+echo "📋 Menyalin file bot..."
+cp earnapp_bot.py /srv/earnapp_bot/
+cp requirements.txt /srv/earnapp_bot/
+cp config.example.json /srv/earnapp_bot/
+cp *.md /srv/earnapp_bot/ 2>/dev/null || true
+cp *.sh /srv/earnapp_bot/ 2>/dev/null || true
+cp LICENSE /srv/earnapp_bot/ 2>/dev/null || true
+
+# Pindah ke direktori bot
 cd /srv/earnapp_bot
 
 # Buat virtual environment
@@ -34,12 +52,7 @@ pip install -r requirements.txt
 # Buat file konfigurasi jika belum ada
 if [ ! -f "config.json" ]; then
     echo "⚙️ Membuat file konfigurasi..."
-    cat > config.json << EOF
-{
-  "bot_token": "YOUR_BOT_TOKEN_HERE",
-  "admin_telegram_id": "YOUR_TELEGRAM_ID_HERE"
-}
-EOF
+    cp config.example.json config.json
 fi
 
 # Buat file devices.json jika belum ada
