@@ -42,7 +42,7 @@ if os.path.exists(DEVICE_FILE):
 else:
     # Device default: lokal
     devices = {
-        "Local": {"type": "local", "path": "/usr/bin"}
+        "SERVER": {"type": "local", "path": "/usr/bin"}
     }
     # Simpan file devices.json default
     with open(DEVICE_FILE, "w") as f:
