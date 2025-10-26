@@ -115,7 +115,7 @@ After=network.target
 Type=simple
 User=your_username
 WorkingDirectory=/srv/earnapp_bot
-Environment=PATH=/srv/earnapp_bot/venv/bin
+Environment=PATH=/srv/earnapp_bot/venv/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
 ExecStart=/srv/earnapp_bot/venv/bin/python earnapp_bot.py
 Restart=always
 RestartSec=10
