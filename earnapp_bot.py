@@ -54,6 +54,9 @@ user_device = {}
 # Menyimpan state sementara saat user menambah device
 add_device_state = {}  # chat_id -> {"step":1..4, "data":{}}
 
+# Menyimpan state sementara saat user ingin menghapus device
+remove_device_state = {}  # chat_id -> True
+
 # Menyimpan scheduled tasks
 scheduled_tasks = {}  # task_id -> {"device": "name", "action": "start/stop", "time": "HH:MM", "days": [1,2,3,4,5]}
 
@@ -239,7 +242,11 @@ def show_main_menu(chat_id):
     )
     markup.add(
         types.KeyboardButton("/adddevice"),
+        types.KeyboardButton("🗑️ Remove Device"),
         types.KeyboardButton("🗑️ Uninstall Bot")
+    )
+    markup.add(
+        types.KeyboardButton("🔄 Restart Bot")
     )
     bot.send_message(chat_id, "Silakan pilih menu di bawah ini 👇", reply_markup=markup)
 
@@ -270,6 +277,25 @@ def select_device(m):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
         
+    # Jika sedang dalam flow remove device
+    if m.chat.id in remove_device_state:
+        device_name = m.text
+        if device_name not in devices:
+            bot.send_message(m.chat.id, f"❌ Device '{device_name}' tidak ditemukan.")
+            remove_device_state.pop(m.chat.id, None)
+            show_main_menu(m.chat.id)
+            return
+
+        # Konfirmasi penghapusan
+        markup = types.InlineKeyboardMarkup()
+        markup.add(
+            types.InlineKeyboardButton("✅ Ya, Hapus", callback_data=f"confirm_remove:{device_name}"),
+            types.InlineKeyboardButton("❌ Batal", callback_data="cancel_remove")
+        )
+        bot.send_message(m.chat.id, f"⚠️ *Konfirmasi Hapus Device*\n\nApakah Anda yakin ingin menghapus device '*{device_name}*'?\n\n**Peringatan:** Tindakan ini akan menghapus device dari konfigurasi.", parse_mode="Markdown", reply_markup=markup)
+        return
+
+    # Normal select device (pilih untuk kontrol)
     user_device[m.chat.id] = m.text
     bot.send_message(m.chat.id, f"✅ Device '{m.text}' dipilih.")
     show_main_menu(m.chat.id)
@@ -520,6 +546,58 @@ def cancel_stop_all(call):
     bot.answer_callback_query(call.id, "❌ Stop all dibatalkan")
     bot.edit_message_text("❌ Stop all dibatalkan.", call.message.chat.id, call.message.message_id)
 
+
+# Callback: konfirmasi hapus device
+@bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("confirm_remove:"))
+def confirm_remove_device(call):
+    # Cek apakah user adalah admin
+    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
+        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+        return
+
+    device_name = call.data.split(":", 1)[1]
+    if device_name not in devices:
+        bot.answer_callback_query(call.id, f"❌ Device '{device_name}' tidak ditemukan.")
+        try:
+            bot.edit_message_text(f"❌ Device '{device_name}' tidak ditemukan.", call.message.chat.id, call.message.message_id)
+        except Exception:
+            pass
+        remove_device_state.pop(call.message.chat.id, None)
+        return
+
+    # Hapus device dari konfigurasi
+    try:
+        del devices[device_name]
+        with open(DEVICE_FILE, "w") as f:
+            json.dump(devices, f, indent=2)
+        try:
+            os.chmod(DEVICE_FILE, 0o600)
+        except Exception:
+            pass
+
+        # Hapus referensi di user_device
+        to_remove = [k for k, v in user_device.items() if v == device_name]
+        for k in to_remove:
+            user_device.pop(k, None)
+
+        bot.answer_callback_query(call.id, "✅ Device dihapus")
+        bot.edit_message_text(f"✅ Device '*{device_name}*' berhasil dihapus dari konfigurasi.", call.message.chat.id, call.message.message_id, parse_mode="Markdown")
+    except Exception as e:
+        bot.answer_callback_query(call.id, "❌ Gagal menghapus device")
+        bot.edit_message_text(f"❌ Gagal menghapus device '{device_name}': {e}", call.message.chat.id, call.message.message_id)
+
+    remove_device_state.pop(call.message.chat.id, None)
+
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_remove")
+def cancel_remove(call):
+    bot.answer_callback_query(call.id, "❌ Hapus device dibatalkan")
+    try:
+        bot.edit_message_text("❌ Hapus device dibatalkan.", call.message.chat.id, call.message.message_id)
+    except Exception:
+        pass
+    remove_device_state.pop(call.message.chat.id, None)
+
 # Health Check
 @bot.message_handler(func=lambda m: m.text == "🔍 Health Check")
 def handler_health_check(m):
@@ -542,6 +620,20 @@ def handler_health_check(m):
     
     message = "🔍 *HEALTH CHECK RESULTS*\n\n" + "\n".join(results)
     bot.reply_to(m, message, parse_mode="Markdown")
+
+
+# Mulai flow hapus device
+@bot.message_handler(func=lambda m: m.text == "🗑️ Remove Device")
+def handler_remove_device(m):
+    # Cek apakah user adalah admin
+    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
+        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+        return
+
+    chat_id = m.chat.id
+    remove_device_state[chat_id] = True
+    bot.send_message(chat_id, "Pilih device yang ingin dihapus:")
+    show_device_menu(chat_id)
 
 # Schedule Tasks
 @bot.message_handler(func=lambda m: m.text == "⏰ Schedule")
@@ -713,6 +805,74 @@ def background_monitor():
             print(f"Error in background monitor: {e}")
             time.sleep(60)  # Sleep 1 menit jika error
 
+# Handler untuk restart bot
+@bot.message_handler(func=lambda m: m.text == "🔄 Restart Bot")
+def handler_restart_bot(m):
+    # Cek apakah user adalah admin
+    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
+        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+        return
+    
+    # Konfirmasi restart
+    markup = types.InlineKeyboardMarkup()
+    markup.add(
+        types.InlineKeyboardButton("✅ Ya, Restart", callback_data="confirm_restart"),
+        types.InlineKeyboardButton("❌ Batal", callback_data="cancel_restart")
+    )
+    bot.reply_to(m, "⚠️ *Konfirmasi Restart Bot*\n\nApakah Anda yakin ingin me-restart bot?\n\nBot akan berhenti sebentar dan memuat ulang konfigurasi.", 
+                 parse_mode="Markdown", reply_markup=markup)
+
+@bot.callback_query_handler(func=lambda call: call.data == "confirm_restart")
+def confirm_restart(call):
+    # Cek apakah user adalah admin
+    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
+        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+        return
+    
+    bot.answer_callback_query(call.id, "🔄 Memulai restart bot...")
+    
+    # Kirim pesan restart
+    bot.edit_message_text(
+        "🔄 *Restart Bot*\n\nBot sedang di-restart...\nSilakan tunggu beberapa detik.",
+        call.message.chat.id,
+        call.message.message_id,
+        parse_mode="Markdown"
+    )
+    
+    # Simpan semua state ke file
+    try:
+        # Simpan devices.json
+        with open(DEVICE_FILE, "w") as f:
+            json.dump(devices, f, indent=2)
+    except Exception as e:
+        print(f"Error saving devices: {e}")
+    
+    # Stop polling dan batalkan semua tasks
+    try:
+        bot.stop_polling()
+    except Exception as e:
+        print(f"Error stopping bot: {e}")
+    
+    # Restart process
+    try:
+        import sys
+        import os
+        python = sys.executable
+        os.execl(python, python, *sys.argv)
+    except Exception as e:
+        print(f"Error restarting: {e}")
+        # Jika gagal restart, coba exit saja (service manager akan restart)
+        sys.exit(1)
+
+@bot.callback_query_handler(func=lambda call: call.data == "cancel_restart")
+def cancel_restart(call):
+    bot.answer_callback_query(call.id, "❌ Restart dibatalkan")
+    bot.edit_message_text(
+        "❌ Restart bot dibatalkan.",
+        call.message.chat.id,
+        call.message.message_id
+    )
+
 # Fallback
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
@@ -723,6 +883,29 @@ def fallback(m):
         
     bot.reply_to(m, "Gunakan tombol menu untuk mengontrol EarnApp 👇")
     show_main_menu(m.chat.id)
+
+# -----------------------
+# Cleanup dan Shutdown
+# -----------------------
+def cleanup():
+    """Cleanup sebelum shutdown/restart"""
+    try:
+        # Simpan state
+        with open(DEVICE_FILE, "w") as f:
+            json.dump(devices, f, indent=2)
+        
+        # Hapus state sementara
+        add_device_state.clear()
+        remove_device_state.clear()
+        
+        # Stop bot polling
+        try:
+            bot.stop_polling()
+        except Exception:
+            pass
+            
+    except Exception as e:
+        print(f"Error during cleanup: {e}")
 
 # -----------------------
 # Run bot
