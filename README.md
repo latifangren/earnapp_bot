@@ -4,20 +4,42 @@ Bot Telegram untuk mengontrol EarnApp di multiple device secara remote melalui S
 
 ## ✨ Fitur
 
+### 🎮 Kontrol Dasar
 - 🟢 **Start/Stop EarnApp** - Kontrol EarnApp di device remote
 - 📊 **Status Monitoring** - Cek status EarnApp real-time
 - 📱 **Device Registration** - Register device baru ke EarnApp
 - 🆔 **Show Device ID** - Tampilkan ID device EarnApp
 - 💣 **Uninstall** - Hapus EarnApp dari device
-- 🗑️ **Uninstall Bot** - Hapus bot dari server (dengan konfirmasi)
+- 🔄 **Ganti Device** - Pilih device lain dengan mudah
+
+### 📊 Multi-Device Management
 - 📊 **Dashboard Multi-Device** - Tampilkan status semua device sekaligus
 - 🚀 **Bulk Operations** - Start/stop semua device sekaligus
 - 🔍 **Device Health Check** - Cek kesehatan device secara berkala
-- ⏰ **Scheduled Tasks** - Jadwal otomatis start/stop device
-- 🔔 **Alert Notifications** - Notifikasi via bot jika ada masalah
 - 🔄 **Multi Device Support** - Kontrol multiple device via SSH
+- 📱 **Easy Device Management** - Tambah/hapus device via bot
+
+### ⏰ Scheduled & Automation
+- 🔄 **Auto Restart (Interval)** - Auto restart EarnApp setiap beberapa jam (stop → wait → start)
+- 🕐 **Time-based Schedule** - Jadwal start/stop/restart pada waktu tertentu
+- 📅 **Schedule Management** - Multiple schedule per device, support harian/mingguan
+- ⚡ **Quick Actions** - Quick restart, quick status, enable/disable auto restart all
+
+### 📝 Logging & History
+- 📝 **Activity Log** - Log semua operasi (start/stop/restart)
+- 🔍 **Filter Log** - Filter berdasarkan device atau tanggal
+- 💾 **Export Log** - Export log ke file JSON/CSV
+- 📊 **History per Device** - Lihat history operasi per device
+
+### 🔔 Notifications
+- 🔔 **Alert Notifications** - Notifikasi via bot jika device offline
+- 📱 **Operation Notifications** - Notifikasi untuk setiap operasi (manual/auto/scheduled)
+- ✅ **Bot Ready Notification** - Notifikasi setelah bot selesai restart
+
+### 🔐 Security & Management
 - 🔐 **Admin Only** - Hanya admin yang bisa akses bot
-- 📱 **Easy Device Management** - Tambah device via bot
+- 🗑️ **Uninstall Bot** - Hapus bot dari server (dengan konfirmasi)
+- 🔄 **Restart Bot** - Restart bot dengan notifikasi ready
 
 ## 🚀 Instalasi Cepat
 
@@ -42,10 +64,27 @@ Edit file `config.json`:
 ```
 
 ### 4. Start Bot
+
+**Opsi 1 - Menggunakan Systemd (Recommended):**
 ```bash
 sudo systemctl start earnapp-bot
 sudo systemctl status earnapp-bot
 ```
+
+**Opsi 2 - Menggunakan Nohup (tanpa systemd):**
+```bash
+cd /srv/earnapp_bot
+nohup ./run_bot.sh > bot.log 2>&1 &
+```
+
+**Opsi 3 - Menggunakan Screen (tanpa systemd):**
+```bash
+screen -S earnapp_bot
+cd /srv/earnapp_bot && ./run_bot.sh
+# Tekan Ctrl+A lalu D untuk detach
+```
+
+⚠️ **PENTING**: Fitur auto restart dan time-based schedule menggunakan background threads yang hanya berjalan jika bot Python aktif. Systemd service memastikan bot selalu berjalan dan fitur auto tetap berfungsi.
 
 ## 📋 Prerequisites
 
@@ -160,7 +199,9 @@ Gunakan tombol menu untuk:
 - 🚀 **Start All** - Start EarnApp di semua device
 - 🛑 **Stop All** - Stop EarnApp di semua device
 - 🔍 **Health Check** - Cek kesehatan semua device
-- ⏰ **Schedule** - Kelola jadwal otomatis
+- ⏰ **Schedule** - Kelola jadwal otomatis (auto restart & time-based)
+- ⚡ **Quick Actions** - Quick restart, quick status, enable/disable auto restart
+- 📝 **Activity Log** - Lihat history dan export log
 - 🔄 **Ganti Device** - Pilih device lain
 - **/adddevice** - Tambah device baru
 
@@ -171,7 +212,7 @@ Gunakan tombol menu untuk:
 4. Masukkan username SSH
 5. Masukkan password SSH
 
-### 5. Fitur Baru
+### 5. Fitur Lengkap
 
 #### 📊 Dashboard Multi-Device
 - Tampilkan status semua device sekaligus
@@ -187,15 +228,35 @@ Gunakan tombol menu untuk:
 - Tampilkan status online/offline
 - Detail error jika ada masalah
 
-#### ⏰ Scheduled Tasks
-- Jadwal otomatis start/stop device
-- Pengaturan waktu dan hari
-- Management jadwal via bot
+#### 🔄 Auto Restart (Interval-based)
+- Auto restart EarnApp setiap beberapa jam
+- Konfigurasi interval per device (minimal 0.5 jam, maksimal 168 jam)
+- Selalu jalankan: stop → wait 5 detik → start
+- Notifikasi otomatis setiap kali dijalankan
 
-#### 🔔 Alert Notifications
-- Notifikasi otomatis jika device offline
-- Alert via Telegram ke admin
-- Pengaturan threshold dan interval
+#### 🕐 Time-based Schedule
+- Jadwal start/stop/restart pada waktu tertentu (format HH:MM)
+- Support multiple schedule per device
+- Pilihan hari: setiap hari, hari kerja, weekend, atau manual
+- Notifikasi otomatis saat schedule dieksekusi
+
+#### ⚡ Quick Actions
+- **Quick Restart**: Restart device (stop → wait → start) dalam 1 klik
+- **Quick Status**: Cek status semua device sekaligus
+- **Enable/Disable Auto Restart All**: Kontrol auto restart semua device
+
+#### 📝 Activity Log & History
+- Log semua operasi (start/stop/restart) dengan detail
+- Filter log berdasarkan device atau tanggal
+- Export log ke file JSON dan CSV
+- History per device dengan detail timestamp
+- Support filter: today, yesterday, week, atau tanggal spesifik
+
+#### 🔔 Notifications
+- **Operation Notifications**: Notifikasi untuk setiap operasi (manual/auto/scheduled)
+- **Alert Notifications**: Notifikasi jika device offline lebih dari threshold
+- **Bot Ready Notification**: Notifikasi setelah bot selesai restart
+- Semua notifikasi dikirim ke admin Telegram
 
 ## 📁 Struktur File
 
@@ -204,9 +265,13 @@ earnapp_bot/
 ├── earnapp_bot.py          # Script utama bot
 ├── config.json             # Konfigurasi bot token & admin ID
 ├── devices.json            # Database device SSH
+├── auto_restart.json       # Konfigurasi auto restart interval
+├── schedules.json          # Konfigurasi time-based schedule
+├── activity_log.json       # Log semua operasi
 ├── requirements.txt        # Dependencies Python
 ├── install.sh             # Script instalasi otomatis
 ├── uninstall.sh           # Script uninstall lengkap
+├── run_bot.sh             # Script alternatif (tanpa systemd)
 ├── README.md              # Dokumentasi utama
 ├── FEATURES.md            # Dokumentasi fitur lengkap
 └── INSTALL.md             # Panduan instalasi detail
@@ -293,7 +358,17 @@ sudo systemctl daemon-reload
 
 ## 📝 Changelog
 
-### v1.1.0 (Latest)
+### v1.2.0 (Latest)
+- ✅ **Auto Restart (Interval)** - Auto restart EarnApp setiap beberapa jam
+- ✅ **Time-based Schedule** - Jadwal start/stop/restart pada waktu tertentu
+- ✅ **Quick Actions** - Quick restart, quick status, enable/disable auto restart all
+- ✅ **Activity Log & History** - Logging semua operasi dengan filter dan export
+- ✅ **Enhanced Notifications** - Notifikasi untuk semua operasi (manual/auto/scheduled)
+- ✅ **Bot Ready Notification** - Notifikasi setelah bot selesai restart
+- ✅ **Multiple Schedule Support** - Multiple schedule per device dengan pilihan hari
+- ✅ **Export Log** - Export activity log ke JSON dan CSV
+
+### v1.1.0
 - ✅ Dashboard Multi-Device - Tampilkan status semua device sekaligus
 - ✅ Bulk Operations - Start/stop semua device sekaligus
 - ✅ Device Health Check - Cek kesehatan device secara berkala

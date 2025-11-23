@@ -97,16 +97,52 @@ EOF
 systemctl daemon-reload
 systemctl enable earnapp-bot.service
 
+# Buat script alternatif untuk menjalankan tanpa systemd (opsional)
+echo "📝 Membuat script alternatif..."
+cat > /srv/earnapp_bot/run_bot.sh << 'SCRIPT_EOF'
+#!/bin/bash
+# Script untuk menjalankan bot tanpa systemd
+# Gunakan nohup atau screen/tmux untuk menjalankan di background
+
+cd /srv/earnapp_bot
+source venv/bin/activate
+python earnapp_bot.py
+SCRIPT_EOF
+chmod +x /srv/earnapp_bot/run_bot.sh
+
 echo "✅ Instalasi selesai!"
 echo ""
 echo "📝 Langkah selanjutnya:"
 echo "1. Edit file /srv/earnapp_bot/config.json"
 echo "2. Masukkan bot token dan telegram ID Anda"
-echo "3. Jalankan: sudo systemctl start earnapp-bot"
-echo "4. Cek status: sudo systemctl status earnapp-bot"
+echo ""
+echo "🚀 Cara menjalankan bot:"
+echo ""
+echo "   OPSI 1 - Menggunakan Systemd (RECOMMENDED):"
+echo "   sudo systemctl start earnapp-bot"
+echo "   sudo systemctl status earnapp-bot"
+echo "   sudo systemctl stop earnapp-bot"
+echo ""
+echo "   OPSI 2 - Menggunakan nohup (tanpa systemd):"
+echo "   cd /srv/earnapp_bot"
+echo "   nohup ./run_bot.sh > bot.log 2>&1 &"
+echo ""
+echo "   OPSI 3 - Menggunakan screen (tanpa systemd):"
+echo "   screen -S earnapp_bot"
+echo "   cd /srv/earnapp_bot && ./run_bot.sh"
+echo "   (Tekan Ctrl+A lalu D untuk detach)"
+echo ""
+echo "⚠️  PENTING:"
+echo "   - Fitur auto restart dan time-based schedule menggunakan background threads"
+echo "   - Thread ini hanya berjalan jika bot Python berjalan"
+echo "   - Systemd service memastikan bot selalu berjalan (auto restart jika crash)"
+echo "   - Tanpa systemd/daemon, bot bisa mati dan fitur auto tidak akan jalan"
+echo "   - RECOMMENDED: Gunakan systemd untuk production"
 echo ""
 echo "🔧 File konfigurasi:"
 echo "- Bot Token: /srv/earnapp_bot/config.json"
 echo "- Devices: /srv/earnapp_bot/devices.json"
 echo ""
-echo "📋 Log bot: journalctl -u earnapp-bot -f"
+echo "📋 Log bot:"
+echo "- Systemd: journalctl -u earnapp-bot -f"
+echo "- Nohup: tail -f /srv/earnapp_bot/bot.log"
