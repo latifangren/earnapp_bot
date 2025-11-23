@@ -7,16 +7,16 @@ Bot Telegram untuk mengontrol EarnApp di multiple device secara remote melalui S
 ### 🎮 Kontrol Dasar
 - 🟢 **Start/Stop EarnApp** - Kontrol EarnApp di device remote
 - 📊 **Status Monitoring** - Cek status EarnApp real-time
-- 📱 **Device Registration** - Register device baru ke EarnApp
 - 🆔 **Show Device ID** - Tampilkan ID device EarnApp
 - 💣 **Uninstall** - Hapus EarnApp dari device
 - 🔄 **Ganti Device** - Pilih device lain dengan mudah
+- ➕ **Add Device** - Tambah device baru (SSH atau ADB)
 
 ### 📊 Multi-Device Management
-- 📊 **Dashboard Multi-Device** - Tampilkan status semua device sekaligus
+- 📊 **Status All Devices** - Tampilkan status semua device sekaligus
 - 🚀 **Bulk Operations** - Start/stop semua device sekaligus
 - 🔍 **Device Health Check** - Cek kesehatan device secara berkala
-- 🔄 **Multi Device Support** - Kontrol multiple device via SSH
+- 🔄 **Multi Device Support** - Kontrol multiple device via SSH atau ADB
 - 📱 **Easy Device Management** - Tambah/hapus device via bot
 
 ### ⏰ Scheduled & Automation
@@ -91,7 +91,8 @@ cd /srv/earnapp_bot && ./run_bot.sh
 ### Server Requirements
 - Ubuntu/Debian Linux
 - Python 3.6+
-- SSH access ke device target
+- SSH access ke device target (untuk device SSH)
+- ADB driver terinstall di server (untuk device ADB)
 - EarnApp terinstall di device target
 
 ### Telegram Setup
@@ -191,33 +192,35 @@ Gunakan tombol menu untuk:
 - 🟢 **Start EarnApp** - Jalankan EarnApp
 - 🔴 **Stop EarnApp** - Hentikan EarnApp
 - 🟡 **Status** - Cek status EarnApp
-- 📱 **Register** - Register device ke EarnApp
+- 📊 **Status All** - Tampilkan status semua device
 - 🆔 **Show ID** - Tampilkan Device ID
 - 💣 **Uninstall** - Hapus EarnApp
-- 🗑️ **Uninstall Bot** - Hapus bot dari server
-- 📊 **Dashboard** - Tampilkan status semua device
+- 🔄 **Ganti Device** - Pilih device lain
+- ➕ **Add Device** - Tambah device baru (SSH atau ADB)
 - 🚀 **Start All** - Start EarnApp di semua device
 - 🛑 **Stop All** - Stop EarnApp di semua device
 - 🔍 **Health Check** - Cek kesehatan semua device
 - ⏰ **Schedule** - Kelola jadwal otomatis (auto restart & time-based)
 - ⚡ **Quick Actions** - Quick restart, quick status, enable/disable auto restart
 - 📝 **Activity Log** - Lihat history dan export log
-- 🔄 **Ganti Device** - Pilih device lain
-- **/adddevice** - Tambah device baru
+- 🗑️ **Uninstall Bot** - Hapus bot dari server
 
 ### 4. Tambah Device Baru
-1. Kirim `/adddevice`
-2. Masukkan IP address device
-3. Masukkan nama device
-4. Masukkan username SSH
-5. Masukkan password SSH
+1. Klik tombol **➕ Add Device** atau kirim `/adddevice`
+2. Pilih tipe device: **🔌 SSH Device** atau **📱 ADB Device (Wireless)**
+3. Masukkan IP address device
+4. Masukkan nama device
+5. 
+   - **Untuk SSH**: Masukkan username dan password SSH
+   - **Untuk ADB**: Masukkan port ADB (default: 5555)
 
 ### 5. Fitur Lengkap
 
-#### 📊 Dashboard Multi-Device
+#### 📊 Status All Devices
 - Tampilkan status semua device sekaligus
 - Monitoring real-time kesehatan device
-- Status EarnApp untuk setiap device
+- Status EarnApp untuk setiap device (SSH dan ADB)
+- Format output yang rapi dan mudah dibaca
 
 #### 🚀 Bulk Operations
 - **Start All**: Jalankan EarnApp di semua device
@@ -358,7 +361,14 @@ sudo systemctl daemon-reload
 
 ## 📝 Changelog
 
-### v1.2.0 (Latest)
+### v1.3.0 (Latest)
+- ✅ **Remote ADB Support** - Kontrol EarnApp via ADB wireless
+- ✅ **Status All Devices** - Menu untuk cek status semua device sekaligus
+- ✅ **Improved Status Display** - Format output yang lebih rapi untuk SSH dan ADB
+- ✅ **Add Device Menu** - Tombol Add Device dengan logo di menu utama
+- ✅ **Device Type Selection** - Pilih tipe device (SSH atau ADB) saat menambah device
+
+### v1.2.0
 - ✅ **Auto Restart (Interval)** - Auto restart EarnApp setiap beberapa jam
 - ✅ **Time-based Schedule** - Jadwal start/stop/restart pada waktu tertentu
 - ✅ **Quick Actions** - Quick restart, quick status, enable/disable auto restart all
