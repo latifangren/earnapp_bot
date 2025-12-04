@@ -25,7 +25,7 @@ di directori /srv/earnapp_bot
 # folder webui/ beserta isinya sudah ada di dalam
 # Masuk ke direktori webui
 cd webui
-
+chmod +x install.sh
 # Jalankan script instalasi
 sudo bash install.sh
 ```
@@ -83,11 +83,9 @@ journalctl -u earnapp-webui -f
 
 **Cara 2 - Menggunakan script run.sh (Development):**
 ```bash
-# Dari root directory proyek (/srv/earnapp_bot)
-bash webui/run.sh
-
-# Atau dari dalam direktori webui
+# dari dalam direktori webui
 cd webui
+chmod +x run.sh
 bash run.sh
 ```
 
