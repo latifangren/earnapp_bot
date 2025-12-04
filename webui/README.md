@@ -20,8 +20,9 @@ Web interface untuk mengontrol EarnApp di multiple device secara remote melalui 
 ### Opsi 1: Instalasi Mandiri (Recommended)
 
 Web UI dapat diinstall secara mandiri tanpa mengganggu bot Telegram:
-
+di directori /srv/earnapp_bot 
 ```bash
+# folder webui/ beserta isinya sudah ada di dalam
 # Masuk ke direktori webui
 cd webui
 
@@ -45,31 +46,6 @@ sudo systemctl status earnapp-webui
 
 # Enable auto-start on boot
 sudo systemctl enable earnapp-webui
-```
-
-### Opsi 2: Menggunakan Venv Bersama (Manual)
-
-**Jika sudah install bot (menggunakan install.sh):**
-Virtual environment sudah dibuat di `/srv/earnapp_bot/venv`. 
-
-**PENTING:** Jika venv dibuat sebelum Flask ditambahkan, install ulang dependencies:
-```bash
-cd /srv/earnapp_bot
-source venv/bin/activate
-pip install -r requirements.txt
-```
-
-Kemudian jalankan Web UI:
-```bash
-bash webui/run.sh
-```
-
-**Jika install manual:**
-```bash
-# Dari root directory proyek
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
 ```
 
 ### 2. Konfigurasi
@@ -115,38 +91,11 @@ cd webui
 bash run.sh
 ```
 
-**Cara 3 - Manual dengan venv:**
-```bash
-# Dari root directory proyek (/srv/earnapp_bot)
-source venv/bin/activate
-python webui/app.py
-
-# Atau dari dalam direktori webui (jika venv di parent)
-cd webui
-source ../venv/bin/activate
-python app.py
-
-# Atau jika venv di dalam webui (instalasi mandiri)
-cd webui
-source venv/bin/activate
-python app.py
-```
-
-**Cara 4 - Tanpa venv (tidak recommended):**
-```bash
-# Dari root directory
-python3 webui/app.py
-
-# Atau dari dalam direktori webui
-cd webui
-python3 app.py
-```
-
 Web UI akan berjalan di `http://localhost:5000`
 
 **Catatan:** 
 - **Instalasi Mandiri**: Web UI memiliki venv sendiri di `webui/venv/`, tidak terganggu dengan bot Telegram
-- **Instalasi Bersama**: Menggunakan venv bersama di root directory
+
 - Disarankan menggunakan systemd service untuk production
 
 ### 4. Akses Web UI
@@ -283,38 +232,6 @@ sudo systemctl status earnapp-webui
 journalctl -u earnapp-webui -f
 ```
 
-### Menggunakan Gunicorn (Advanced)
-
-Untuk production dengan Gunicorn:
-
-```bash
-# Install Gunicorn
-cd webui
-source venv/bin/activate
-pip install gunicorn
-
-# Jalankan dengan Gunicorn
-gunicorn -w 4 -b 0.0.0.0:5000 app:app
-```
-
-Atau update systemd service untuk menggunakan Gunicorn:
-
-```ini
-[Unit]
-Description=EarnApp Bot Web UI
-After=network.target
-
-[Service]
-Type=simple
-User=your_username
-WorkingDirectory=/srv/earnapp_bot/webui
-Environment=PATH=/srv/earnapp_bot/webui/venv/bin
-ExecStart=/srv/earnapp_bot/webui/venv/bin/gunicorn -w 4 -b 0.0.0.0:5000 app:app
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
 
 ## 📄 License
 
