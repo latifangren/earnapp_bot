@@ -1,234 +1,198 @@
-# 📁 Struktur Project EarnApp Bot
+# Struktur Project EarnApp Bot
 
-## 🗂️ File dan Direktori
+Dokumen ini menjelaskan struktur project setelah refactor bertahap. Tujuan utama refactor adalah memisahkan core application dari adapter Telegram dan Web UI tanpa mengganti cara menjalankan lama.
 
-```
+## Tree Ringkas
+
+```text
 earnapp_bot/
-├── 📄 earnapp_bot.py          # Script utama bot Telegram
-├── ⚙️ config.json             # Konfigurasi bot token & admin ID (SENSITIVE)
-├── 📱 devices.json            # Database device SSH (SENSITIVE)
-├── 📋 requirements.txt        # Dependencies Python
-├── 🚀 install.sh             # Script instalasi otomatis
-├── 🗑️ uninstall.sh           # Script uninstall lengkap
-├── 📖 README.md              # Dokumentasi utama
-├── 📋 INSTALL.md             # Panduan instalasi detail
-├── 📁 PROJECT_STRUCTURE.md   # Dokumentasi struktur project
-├── ⚙️ config.example.json    # Template konfigurasi
-├── 📄 LICENSE                # Lisensi MIT
-└── 🔒 .gitignore             # File yang diabaikan Git
+├── earnapp/                    # Package reusable hasil refactor
+│   ├── __init__.py
+│   └── core/
+│       ├── __init__.py
+│       ├── errors.py           # Error dasar aplikasi
+│       ├── executors.py        # Local/SSH/ADB executor seam
+│       ├── models.py           # Model ringan untuk JSON legacy
+│       ├── runtime.py          # Runtime path + EARNAPP_DATA_DIR
+│       ├── storage.py          # JsonStorage, atomic write, locking
+│       ├── use_cases.py        # Workflow shared bot dan Web UI
+│       └── workers.py          # Background monitor/restart/schedule
+├── docs/
+│   ├── ARCHITECTURE.md         # Arsitektur target
+│   └── REFACTOR_PLAN.md        # Plan refactor bertahap
+├── webui/
+│   ├── app.py                  # Flask adapter tipis
+│   ├── install.sh
+│   ├── run.sh
+│   ├── uninstall.sh
+│   ├── requirements.txt
+│   ├── templates/
+│   └── static/
+├── earnapp_bot.py              # Telegram adapter / entry point lama
+├── config.example.json
+├── requirements.txt
+├── install.sh
+├── uninstall.sh
+├── README.md
+├── INSTALL.md
+├── PROJECT_STRUCTURE.md
+├── FEATURES.md
+├── UNINSTALL_GUIDE.md
+└── LICENSE
 ```
 
-## 📄 Penjelasan File
+## Runtime JSON
 
-### Core Files
-- **`earnapp_bot.py`** - Script utama bot yang menangani semua fungsi
-- **`config.json`** - Menyimpan bot token dan admin telegram ID (SENSITIVE)
-- **`devices.json`** - Database device SSH dengan kredensial (SENSITIVE)
+File runtime berikut tidak dimaksudkan untuk di-commit karena berisi konfigurasi lokal dan data operasional:
 
-### Dependencies
-- **`requirements.txt`** - Daftar package Python yang diperlukan
-- **`install.sh`** - Script bash untuk instalasi otomatis
-- **`uninstall.sh`** - Script bash untuk uninstall lengkap
+- `config.json` - bot token dan Telegram admin ID.
+- `devices.json` - daftar device SSH/ADB/local, termasuk kredensial SSH jika digunakan.
+- `schedules.json` - jadwal time-based schedule.
+- `auto_restart.json` - konfigurasi interval auto-restart.
+- `activity_log.json` - log operasi start/stop/restart.
 
-### Documentation
-- **`README.md`** - Dokumentasi utama dengan fitur dan cara penggunaan
-- **`INSTALL.md`** - Panduan instalasi step-by-step yang detail
-- **`PROJECT_STRUCTURE.md`** - Dokumentasi struktur project ini
+Semua akses runtime JSON sekarang melewati `earnapp.core.storage.JsonStorage`. Storage ini menyediakan default value, atomic write, dan lock file sederhana.
 
-### Configuration
-- **`config.example.json`** - Template konfigurasi untuk user baru
-- **`.gitignore`** - File yang tidak di-commit ke Git (konfigurasi sensitif)
+## Core Package
 
-### Legal
-- **`LICENSE`** - Lisensi MIT untuk project
+### `earnapp.core.runtime`
 
-## 🔐 File Sensitif
+Menentukan lokasi file runtime. Default data directory adalah project root. Jika environment variable `EARNAPP_DATA_DIR` di-set, file runtime akan dibaca/ditulis dari directory tersebut.
 
-File berikut **TIDAK** di-commit ke Git karena berisi data sensitif:
+### `earnapp.core.storage`
 
-- `config.json` - Berisi bot token dan admin ID
-- `devices.json` - Berisi kredensial SSH device
+Satu seam untuk baca/tulis JSON runtime:
 
-## 📦 Dependencies
+- config
+- devices
+- schedules
+- auto-restart
+- activity log
 
-### Python Packages
-- `pyTelegramBotAPI==4.14.0` - Library untuk Telegram Bot API
-- `paramiko==3.4.0` - Library untuk koneksi SSH
+### `earnapp.core.models`
 
-### System Requirements
-- Python 3.6+
-- Ubuntu/Debian Linux
-- SSH access ke device target
-- EarnApp terinstall di device target
+Model ringan untuk menjaga bentuk data legacy tetap jelas tanpa memaksa migrasi database.
 
-## 🚀 Cara Deploy
+### `earnapp.core.executors`
 
-### 1. Clone Repository
+Memusatkan eksekusi command untuk:
+
+- local device
+- SSH device
+- ADB wireless device
+
+Telegram dan Web UI tidak perlu tahu detail `subprocess`, Paramiko, atau command ADB.
+
+### `earnapp.core.use_cases`
+
+Workflow shared untuk device CRUD, status, start/stop/restart, bulk operation, schedule, auto-restart, health-check, dan activity log.
+
+### `earnapp.core.workers`
+
+Background loop untuk monitoring, auto-restart, dan time schedule. Worker membaca ulang shared JSON secara berkala agar perubahan dari Web UI bisa terlihat tanpa restart bot pada operasi normal.
+
+## Entry Point dan Adapter
+
+### `earnapp_bot.py`
+
+Masih menjadi entry point Telegram yang kompatibel dengan cara menjalankan lama:
+
 ```bash
-git clone https://github.com/username/earnapp_bot.git
+python earnapp_bot.py
+```
+
+File ini sekarang bertindak sebagai adapter Telegram. Handler/menu tetap berada di file ini, tetapi workflow penting diarahkan ke `earnapp.core`.
+
+### `webui/app.py`
+
+Flask adapter untuk endpoint `/api/*`. File ini menambahkan project root ke `sys.path`, lalu memakai `earnapp.core.storage` dan `earnapp.core.use_cases`.
+
+## Deployment
+
+### Clone Repository
+
+```bash
+git clone https://github.com/latifangren/earnapp_bot.git
 cd earnapp_bot
-```
-
-### 2. Setup Konfigurasi
-```bash
-# Copy template
-cp config.example.json config.json
-
-# Edit dengan data Anda
-nano config.json
-```
-
-### 3. Install Dependencies
-```bash
-# Otomatis
 sudo bash install.sh
+```
 
-# Atau manual
+### Manual ke `/srv/earnapp_bot`
+
+```bash
+sudo mkdir -p /srv/earnapp_bot
+cd /srv/earnapp_bot
+sudo git clone https://github.com/latifangren/earnapp_bot.git .
+sudo chown -R $USER:$USER /srv/earnapp_bot
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Start Bot
+Pastikan folder `earnapp/` ikut ada di `/srv/earnapp_bot`, karena bot dan Web UI mengimpor package tersebut.
+
+## Runtime Data Directory
+
+Default runtime directory adalah project root, misalnya `/srv/earnapp_bot`.
+
+Jika ingin menyimpan JSON runtime di lokasi lain, set environment variable yang sama di service bot dan Web UI:
+
+```ini
+Environment=EARNAPP_DATA_DIR=/srv/earnapp_bot
+```
+
+Jika value berbeda antara bot dan Web UI, data tidak akan sinkron.
+
+## Dependencies
+
+### Python Packages
+
+- `pyTelegramBotAPI` - Telegram Bot API.
+- `paramiko` - SSH executor.
+- Flask dependencies untuk Web UI berada di `webui/requirements.txt` jika Web UI diinstall mandiri.
+
+### System Requirements
+
+- Python 3.6+
+- Ubuntu/Debian Linux
+- SSH access untuk device SSH
+- ADB untuk device Android/ADB wireless
+- EarnApp terinstall di device target
+
+## Security Notes
+
+1. Jangan commit `config.json`, `devices.json`, atau runtime JSON lain.
+2. `devices.json` bisa berisi password SSH; batasi permission file dan akses server.
+3. Telegram bot hanya menerima admin ID yang dikonfigurasi.
+4. Web UI belum memiliki autentikasi bawaan; lindungi dengan firewall/reverse proxy/auth jika production.
+5. Gunakan SSH key jika memungkinkan.
+
+## Monitoring
+
 ```bash
-# Via systemd
-sudo systemctl start earnapp-bot
-
-# Atau manual
-python earnapp_bot.py
-```
-
-## 🔧 Konfigurasi
-
-### config.json
-```json
-{
-  "bot_token": "YOUR_BOT_TOKEN",
-  "admin_telegram_id": "YOUR_TELEGRAM_ID"
-}
-```
-
-### devices.json
-```json
-{
-  "Local": {
-    "type": "local",
-    "path": "/usr/bin"
-  },
-  "Server1": {
-    "type": "ssh",
-    "host": "192.168.1.100",
-    "port": 22,
-    "user": "username",
-    "password": "password"
-  }
-}
-```
-
-## 📊 Monitoring
-
-### Log Files
-- Systemd log: `journalctl -u earnapp-bot -f`
-- Manual log: Output console saat run manual
-
-### Status Check
-```bash
-# Service status
 sudo systemctl status earnapp-bot
-
-# Process check
-ps aux | grep earnapp_bot
-
-# Port check (jika ada)
-netstat -tlnp | grep python
-```
-
-## 🔄 Update Process
-
-### 1. Backup Konfigurasi
-```bash
-cp config.json config.json.backup
-cp devices.json devices.json.backup
-```
-
-### 2. Update Code
-```bash
-git pull
-```
-
-### 3. Restart Service
-```bash
+journalctl -u earnapp-bot -f
 sudo systemctl restart earnapp-bot
 ```
 
-## 🗑️ Cleanup
+Untuk Web UI:
 
-### Uninstall via Bot (Recommended)
-1. Buka bot di Telegram
-2. Klik tombol "🗑️ Uninstall Bot"
-3. Konfirmasi uninstall
-4. Bot akan otomatis menghapus semua file
-
-### Uninstall via Script
 ```bash
-# Jalankan script uninstall lengkap
-sudo bash /srv/earnapp_bot/uninstall.sh
+sudo systemctl status earnapp-webui
+journalctl -u earnapp-webui -f
 ```
 
-### Uninstall Manual
+## Development Checks
+
 ```bash
-# Stop service
-sudo systemctl stop earnapp-bot
-sudo systemctl disable earnapp-bot
-
-# Remove files
-sudo rm -rf /srv/earnapp_bot
-sudo rm /etc/systemd/system/earnapp-bot.service
-
-# Reload systemd
-sudo systemctl daemon-reload
+python3 -m py_compile earnapp_bot.py webui/app.py earnapp/core/*.py
+bash -n install.sh uninstall.sh webui/install.sh webui/run.sh webui/uninstall.sh
 ```
 
-## 🛡️ Security Notes
+Full runtime test Telegram/Web UI membutuhkan dependencies terinstall dan konfigurasi valid.
 
-1. **Jangan commit file sensitif** - `config.json` dan `devices.json` sudah di-ignore
-2. **Gunakan SSH key** - Lebih aman dari password untuk SSH
-3. **Restrict bot access** - Hanya admin yang terdaftar bisa akses
-4. **Regular update** - Update dependencies secara berkala
-5. **Monitor logs** - Pantau log untuk aktivitas mencurigakan
+## Support
 
-## 📝 Development
-
-### Local Development
-```bash
-# Setup environment
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-
-# Run bot
-python earnapp_bot.py
-```
-
-### Testing
-```bash
-# Test SSH connection
-python -c "import paramiko; print('SSH OK')"
-
-# Test Telegram API
-python -c "import telebot; print('Telegram OK')"
-```
-
-## 🤝 Contributing
-
-1. Fork repository
-2. Buat feature branch
-3. Commit changes
-4. Push ke branch
-5. Buat Pull Request
-
-## 📞 Support
-
-- GitHub Issues: [Repository Issues](https://github.com/username/earnapp_bot/issues)
-- Documentation: Lihat README.md dan INSTALL.md
-- Logs: `journalctl -u earnapp-bot -f`
+- GitHub Issues: https://github.com/latifangren/earnapp_bot/issues
+- Dokumentasi utama: `README.md`, `INSTALL.md`, `docs/ARCHITECTURE.md`
+- Log bot: `journalctl -u earnapp-bot -f`

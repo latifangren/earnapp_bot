@@ -1,103 +1,40 @@
-# 📋 Panduan Instalasi EarnApp Bot
+# Panduan Instalasi EarnApp Bot
 
-## 🚀 Instalasi Cepat (Recommended)
+Dokumen ini menjelaskan instalasi EarnApp Bot setelah refactor bertahap. Entry point lama tetap dipakai (`earnapp_bot.py` dan `webui/app.py`), tetapi logic utama sekarang berada di package `earnapp/`.
+
+## Instalasi Cepat
 
 ### 1. Persiapan Server
-```bash
-# Update sistem
-sudo apt update && sudo apt upgrade -y
 
-# Install git jika belum ada
-sudo apt install -y git
+```bash
+sudo apt update && sudo apt upgrade -y
+sudo apt install -y git python3 python3-pip python3-venv libffi-dev libssl-dev
 ```
 
 ### 2. Clone Repository
-```bash
-# Clone repository
-git clone https://github.com/username/earnapp_bot.git
-cd earnapp_bot
 
-# Jalankan script instalasi otomatis
+```bash
+git clone https://github.com/latifangren/earnapp_bot.git
+cd earnapp_bot
 sudo bash install.sh
 ```
 
+Script installer akan menyalin komponen utama ke `/srv/earnapp_bot`, termasuk:
+
+- `earnapp_bot.py`
+- package `earnapp/`
+- folder `docs/`
+- folder `webui/` beserta template/static/script pendukung
+- file `.md`, `.sh`, `requirements.txt`, dan `config.example.json`
+
 ### 3. Konfigurasi Bot
+
 ```bash
-# Edit file konfigurasi
 sudo nano /srv/earnapp_bot/config.json
 ```
 
-Isi dengan data Anda:
-```json
-{
-  "bot_token": "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz",
-  "admin_telegram_id": "123456789"
-}
-```
+Isi dengan token dan Telegram ID admin:
 
-### 4. Start Bot
-```bash
-# Start service
-sudo systemctl start earnapp-bot
-
-# Enable auto-start
-sudo systemctl enable earnapp-bot
-
-# Cek status
-sudo systemctl status earnapp-bot
-```
-
-## 🔧 Instalasi Manual
-
-### 1. Install Dependencies Sistem
-```bash
-# Update sistem
-sudo apt update && sudo apt upgrade -y
-
-# Install Python dan tools
-sudo apt install -y python3 python3-pip python3-venv git
-
-# Install dependencies untuk paramiko
-sudo apt install -y libffi-dev libssl-dev
-```
-
-### 2. Setup Direktori
-```bash
-# Buat direktori
-sudo mkdir -p /srv/earnapp_bot
-cd /srv/earnapp_bot
-
-# Clone repository
-sudo git clone https://github.com/username/earnapp_bot.git .
-
-# Set ownership
-sudo chown -R $USER:$USER /srv/earnapp_bot
-```
-
-### 3. Setup Python Environment
-```bash
-cd /srv/earnapp_bot
-
-# Buat virtual environment
-python3 -m venv venv
-
-# Aktifkan virtual environment
-source venv/bin/activate
-
-# Install dependencies
-pip install -r requirements.txt
-```
-
-### 4. Konfigurasi Bot
-```bash
-# Copy template konfigurasi
-cp config.example.json config.json
-
-# Edit konfigurasi
-nano config.json
-```
-
-Isi `config.json`:
 ```json
 {
   "bot_token": "YOUR_BOT_TOKEN_HERE",
@@ -105,13 +42,61 @@ Isi `config.json`:
 }
 ```
 
-### 5. Setup Systemd Service
+### 4. Start Bot
+
 ```bash
-# Buat service file
+sudo systemctl start earnapp-bot
+sudo systemctl enable earnapp-bot
+sudo systemctl status earnapp-bot
+```
+
+## Instalasi Manual
+
+### 1. Setup Direktori
+
+```bash
+sudo mkdir -p /srv/earnapp_bot
+cd /srv/earnapp_bot
+sudo git clone https://github.com/latifangren/earnapp_bot.git .
+sudo chown -R $USER:$USER /srv/earnapp_bot
+```
+
+Pastikan folder `earnapp/` ikut ada setelah clone. Bot dan Web UI sekarang mengimpor modul dari `earnapp.core`, jadi package ini wajib ikut ter-deploy.
+
+### 2. Setup Python Environment
+
+```bash
+cd /srv/earnapp_bot
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
+
+### 3. Setup Konfigurasi
+
+```bash
+cp config.example.json config.json
+nano config.json
+```
+
+Runtime JSON yang dipakai bersama:
+
+- `config.json`
+- `devices.json`
+- `schedules.json`
+- `auto_restart.json`
+- `activity_log.json`
+
+Secara default file-file ini dibaca dari project root (`/srv/earnapp_bot`). Jika ingin menyimpan data runtime di lokasi lain, set `EARNAPP_DATA_DIR` pada service bot dan Web UI ke path yang sama.
+
+### 4. Setup Systemd Service
+
+```bash
 sudo nano /etc/systemd/system/earnapp-bot.service
 ```
 
-Isi dengan (ganti `your_username` dengan username Anda):
+Contoh service:
+
 ```ini
 [Unit]
 Description=EarnApp Bot Service
@@ -121,7 +106,9 @@ After=network.target
 Type=simple
 User=your_username
 WorkingDirectory=/srv/earnapp_bot
-Environment=PATH=/srv/earnapp_bot/venv/bin
+Environment=PATH=/srv/earnapp_bot/venv/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+# Optional jika runtime JSON disimpan di luar project root:
+# Environment=EARNAPP_DATA_DIR=/srv/earnapp_bot
 ExecStart=/srv/earnapp_bot/venv/bin/python earnapp_bot.py
 Restart=always
 RestartSec=10
@@ -130,222 +117,165 @@ RestartSec=10
 WantedBy=multi-user.target
 ```
 
-### 6. Enable dan Start Service
+Lalu aktifkan service:
+
 ```bash
-# Reload systemd
 sudo systemctl daemon-reload
-
-# Enable service
 sudo systemctl enable earnapp-bot
-
-# Start service
 sudo systemctl start earnapp-bot
-
-# Cek status
 sudo systemctl status earnapp-bot
 ```
 
-## 🤖 Setup Telegram Bot
+## Runtime Data dan Sinkronisasi
 
-### 1. Buat Bot di Telegram
-1. Buka [@BotFather](https://t.me/botfather) di Telegram
-2. Kirim `/newbot`
-3. Masukkan nama bot (contoh: "EarnApp Controller")
-4. Masukkan username bot (contoh: "earnapp_controller_bot")
-5. Simpan **Bot Token** yang diberikan
+Semua akses runtime JSON melewati `earnapp.core.storage.JsonStorage`. Storage ini menyediakan default value, atomic write, dan lock file sederhana supaya Bot Telegram dan Web UI tidak menulis file yang sama secara bersamaan tanpa koordinasi.
 
-### 2. Dapatkan Telegram ID
-1. Buka [@userinfobot](https://t.me/userinfobot) di Telegram
-2. Kirim pesan apapun
-3. Bot akan mengirim **Your user ID**
-4. Simpan ID tersebut
+Jika Bot Telegram dan Web UI dijalankan sebagai service terpisah, pastikan keduanya memakai data directory yang sama:
 
-### 3. Update Konfigurasi
-```bash
-# Edit file konfigurasi
-nano /srv/earnapp_bot/config.json
+```ini
+Environment=EARNAPP_DATA_DIR=/srv/earnapp_bot
 ```
 
-Isi dengan data yang didapat:
-```json
-{
-  "bot_token": "1234567890:ABCdefGHIjklMNOpqrsTUVwxyz",
-  "admin_telegram_id": "123456789"
-}
-```
+Jika environment variable tidak di-set, default-nya adalah project root tempat package `earnapp/` berada.
 
-## 📱 Setup Device SSH
+## Setup Telegram Bot
 
-### 1. Install EarnApp di Device Target
+1. Buka [@BotFather](https://t.me/botfather).
+2. Kirim `/newbot`.
+3. Simpan Bot Token.
+4. Buka [@userinfobot](https://t.me/userinfobot) untuk mendapatkan Telegram ID.
+5. Masukkan keduanya ke `/srv/earnapp_bot/config.json`.
+
+## Setup Device SSH
+
+Install EarnApp di device target:
+
 ```bash
-# Di device target, install EarnApp
 curl -sL https://earnapp.com/install.sh | sudo bash
 ```
 
-### 2. Setup SSH di Device Target
-```bash
-# Install SSH server
-sudo apt install -y openssh-server
+Pastikan SSH aktif di device target:
 
-# Start SSH service
+```bash
+sudo apt install -y openssh-server
 sudo systemctl start ssh
 sudo systemctl enable ssh
-
-# Cek status
 sudo systemctl status ssh
 ```
 
-### 3. Tambah Device via Bot
-1. Start bot dengan `/start`
-2. Pilih device "Local" dulu
-3. Kirim `/adddevice`
-4. Ikuti instruksi untuk menambah device SSH
+Tambah device melalui Telegram dengan `/adddevice` atau melalui Web UI.
 
-## 🔍 Troubleshooting
+## Setup Device ADB
+
+Untuk device Android/ADB wireless, pastikan ADB tersedia di server dan device dapat diakses melalui IP/port yang benar. Port default adalah `5555`.
+
+## Web UI
+
+Installer utama menyalin folder `webui/` ke `/srv/earnapp_bot/webui`. Web UI dapat memakai virtual environment dan systemd service terpisah. Lihat `webui/README.md` untuk detail.
+
+Jika Web UI dijalankan dari folder `webui/`, `webui/app.py` akan menambahkan project root ke `sys.path` agar package `earnapp/` tetap bisa diimpor.
+
+## Troubleshooting
 
 ### Bot Tidak Start
+
 ```bash
-# Cek log error
 journalctl -u earnapp-bot -f
-
-# Cek konfigurasi
 cat /srv/earnapp_bot/config.json
-
-# Test manual
 cd /srv/earnapp_bot
 source venv/bin/activate
 python earnapp_bot.py
 ```
 
+### Import `earnapp` Gagal
+
+Pastikan folder `/srv/earnapp_bot/earnapp/` ada. Jika tidak ada, deployment tidak lengkap atau installer lama dipakai.
+
+### Data Web UI dan Bot Tidak Sama
+
+Pastikan kedua service memakai project root/data directory yang sama. Jika memakai `EARNAPP_DATA_DIR`, set value yang sama di `earnapp-bot.service` dan `earnapp-webui.service`.
+
 ### SSH Connection Error
+
 ```bash
-# Test koneksi SSH manual
 ssh user@ip_address
-
-# Cek SSH service di device target
 sudo systemctl status ssh
-
-# Cek firewall
 sudo ufw status
 ```
 
 ### EarnApp Command Error
+
 ```bash
-# Cek EarnApp terinstall
 which earnapp
-
-# Test command manual
 earnapp status
-
-# Cek permission
 ls -la /usr/bin/earnapp
 ```
 
 ### Permission Error
-```bash
-# Fix ownership
-sudo chown -R $USER:$USER /srv/earnapp_bot
 
-# Fix permission
+```bash
+sudo chown -R $USER:$USER /srv/earnapp_bot
 chmod +x /srv/earnapp_bot/earnapp_bot.py
 ```
 
-## 📊 Monitoring
+## Monitoring
 
-### Cek Status Service
 ```bash
 sudo systemctl status earnapp-bot
-```
-
-### Lihat Log Real-time
-```bash
 journalctl -u earnapp-bot -f
-```
-
-### Restart Service
-```bash
 sudo systemctl restart earnapp-bot
-```
-
-### Stop Service
-```bash
 sudo systemctl stop earnapp-bot
 ```
 
-## 🔄 Update Bot
+## Update Bot
 
 ```bash
 cd /srv/earnapp_bot
-
-# Backup konfigurasi
 cp config.json config.json.backup
 cp devices.json devices.json.backup
-
-# Update code
+cp schedules.json schedules.json.backup 2>/dev/null || true
+cp auto_restart.json auto_restart.json.backup 2>/dev/null || true
+cp activity_log.json activity_log.json.backup 2>/dev/null || true
 git pull
-
-# Restart service
 sudo systemctl restart earnapp-bot
 ```
 
-## 🗑️ Uninstall
+## Uninstall
 
-### Uninstall via Bot (Recommended)
-1. Buka bot di Telegram
-2. Klik tombol "🗑️ Uninstall Bot"
-3. Konfirmasi uninstall
-4. Bot akan otomatis menghapus semua file
+### Via Bot
 
-### Uninstall via Script
+1. Buka bot di Telegram.
+2. Klik tombol "Uninstall Bot".
+3. Konfirmasi uninstall.
+
+### Via Script
+
 ```bash
-# Jalankan script uninstall lengkap
 sudo bash /srv/earnapp_bot/uninstall.sh
 ```
 
-### Uninstall Manual
+### Manual
+
 ```bash
-# Stop service
 sudo systemctl stop earnapp-bot
 sudo systemctl disable earnapp-bot
-
-# Hapus service file
 sudo rm /etc/systemd/system/earnapp-bot.service
-
-# Reload systemd
 sudo systemctl daemon-reload
-
-# Hapus direktori
 sudo rm -rf /srv/earnapp_bot
 ```
 
-## ✅ Verifikasi Instalasi
+## Verifikasi Instalasi
 
-### 1. Cek Service Status
-```bash
-sudo systemctl status earnapp-bot
-```
-Harus menunjukkan `Active: active (running)`
+1. `sudo systemctl status earnapp-bot` menunjukkan service aktif.
+2. `journalctl -u earnapp-bot --no-pager -l` menampilkan bot aktif.
+3. Kirim `/start` ke bot Telegram.
+4. Pilih device dan jalankan menu `Status`.
 
-### 2. Cek Log
-```bash
-journalctl -u earnapp-bot --no-pager -l
-```
-Harus menunjukkan "Bot EarnApp multi-device aktif..."
-
-### 3. Test Bot di Telegram
-1. Buka bot di Telegram
-2. Kirim `/start`
-3. Harus muncul menu pilihan device
-
-### 4. Test Command
-1. Pilih device
-2. Klik "🟡 Status"
-3. Harus menampilkan status EarnApp
-
-## 🆘 Support
+## Support
 
 Jika ada masalah:
-1. Cek log: `journalctl -u earnapp-bot -f`
-2. Cek konfigurasi: `cat /srv/earnapp_bot/config.json`
-3. Test manual: `cd /srv/earnapp_bot && source venv/bin/activate && python earnapp_bot.py`
-4. Buat issue di GitHub dengan detail error
+
+1. Cek log: `journalctl -u earnapp-bot -f`.
+2. Cek konfigurasi: `cat /srv/earnapp_bot/config.json`.
+3. Test manual: `cd /srv/earnapp_bot && source venv/bin/activate && python earnapp_bot.py`.
+4. Buat issue di GitHub dengan detail error.

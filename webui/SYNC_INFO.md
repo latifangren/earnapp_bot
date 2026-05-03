@@ -1,114 +1,87 @@
-# 🔄 Informasi Sinkronisasi Web UI dengan Bot Telegram
+# Informasi Sinkronisasi Web UI dengan Bot Telegram
 
-## ✅ Data Tetap Sinkron!
+Web UI dan Bot Telegram berbagi runtime JSON yang sama melalui `earnapp.core.storage.JsonStorage`.
 
-Meskipun Web UI memiliki **instalasi mandiri** (venv dan systemd service sendiri), **semua data tetap sinkron** dengan bot Telegram karena menggunakan file JSON yang sama.
+## File yang Di-share
 
-## 📁 File yang Di-share (Sinkron)
+File berikut berada di data directory yang sama, default-nya root project `/srv/earnapp_bot`:
 
-Semua file berikut berada di **root directory** (`/srv/earnapp_bot/`) dan digunakan oleh **kedua aplikasi**:
+- `config.json` - konfigurasi bot token dan admin ID.
+- `devices.json` - daftar device SSH/ADB/local.
+- `schedules.json` - time-based schedule.
+- `auto_restart.json` - konfigurasi auto-restart interval.
+- `activity_log.json` - log operasi.
 
-### 1. `devices.json`
-- **Fungsi:** Daftar semua device (SSH, ADB, Local)
-- **Sinkronisasi:** 
-  - ✅ Tambah device via Web UI → Terlihat di Bot Telegram
-  - ✅ Tambah device via Bot Telegram → Terlihat di Web UI
-  - ✅ Hapus device via Web UI → Terlihat di Bot Telegram
-  - ✅ Hapus device via Bot Telegram → Terlihat di Web UI
+Jika `EARNAPP_DATA_DIR` di-set, kedua service harus memakai value yang sama.
 
-### 2. `schedules.json`
-- **Fungsi:** Jadwal otomatis (time-based schedule)
-- **Sinkronisasi:**
-  - ✅ Buat jadwal reboot via Bot Telegram → Terlihat di Web UI
-  - ✅ Buat jadwal via Web UI → Terlihat di Bot Telegram
-  - ✅ Edit/Delete jadwal → Sinkron di kedua interface
+## Cara Kerja Setelah Refactor
 
-### 3. `auto_restart.json`
-- **Fungsi:** Konfigurasi auto restart interval
-- **Sinkronisasi:**
-  - ✅ Enable/Disable auto restart via Bot → Terlihat di Web UI
-  - ✅ Set interval via Bot → Terlihat di Web UI
-  - ✅ Perubahan via Web UI → Terlihat di Bot
+### Web UI
 
-### 4. `activity_log.json`
-- **Fungsi:** Log semua operasi (start/stop/restart)
-- **Sinkronisasi:**
-  - ✅ Start device via Web UI → Ter-log, terlihat di Bot
-  - ✅ Stop device via Bot → Ter-log, terlihat di Web UI
-  - ✅ Auto restart → Ter-log di kedua interface
+`webui/app.py` adalah adapter Flask. Semua route API memanggil use-case dari `earnapp.core.use_cases`, lalu use-case membaca/menulis runtime JSON melalui `JsonStorage`.
 
-### 5. `config.json`
-- **Fungsi:** Konfigurasi bot token dan admin ID
-- **Sinkronisasi:** Shared untuk referensi logging
+### Bot Telegram
 
-## 🔍 Cara Kerja Sinkronisasi
+`earnapp_bot.py` adalah adapter Telegram. Handler membaca ulang state runtime sebelum operasi penting seperti list device, schedule, auto-restart, dan activity log.
 
-### Path File di Web UI:
-```python
-# webui/app.py
-ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-# ROOT_DIR = /srv/earnapp_bot
+### Worker Bot
 
-DEVICE_FILE = os.path.join(ROOT_DIR, "devices.json")
-SCHEDULE_FILE = os.path.join(ROOT_DIR, "schedules.json")
-AUTO_RESTART_FILE = os.path.join(ROOT_DIR, "auto_restart.json")
-ACTIVITY_LOG_FILE = os.path.join(ROOT_DIR, "activity_log.json")
+Worker auto-restart dan time-schedule di `earnapp.core.workers` membaca ulang `auto_restart.json` dan `schedules.json` pada setiap loop. Dengan begitu, perubahan dari Web UI normalnya terlihat tanpa restart bot.
+
+## Proteksi Write
+
+`JsonStorage` memakai:
+
+- default value saat file belum ada,
+- atomic write via temporary file dan replace,
+- lock file sederhana untuk koordinasi antar proses.
+
+Ini mengurangi risiko file JSON rusak saat Bot dan Web UI berjalan bersamaan.
+
+## Contoh Sinkronisasi
+
+### Tambah Device dari Web UI
+
+1. Web UI menyimpan device ke `devices.json` melalui `JsonStorage`.
+2. Bot refresh `devices` saat menu/pilihan device dibuka.
+3. Device baru muncul di Telegram tanpa restart bot pada operasi normal.
+
+### Buat Schedule dari Web UI
+
+1. Web UI menyimpan schedule ke `schedules.json`.
+2. Worker schedule membaca ulang `schedules.json` pada loop berikutnya.
+3. Schedule baru bisa dieksekusi tanpa restart bot.
+
+### Set Auto-Restart dari Web UI
+
+1. Web UI menyimpan policy ke `auto_restart.json`.
+2. Worker auto-restart membaca ulang policy pada loop berikutnya.
+3. Policy baru dipakai tanpa restart bot.
+
+### Activity Log
+
+1. Operasi dari Web UI atau Bot menulis ke `activity_log.json`.
+2. Tampilan log di kedua interface membaca ulang file saat dibuka.
+
+## Batasan Sinkronisasi
+
+Sinkronisasi ini berbasis file JSON, bukan database transaksi. Jika Bot dan Web UI mengubah key yang sama pada waktu yang sangat bersamaan, write terakhir masih bisa menang.
+
+Untuk penggunaan normal, pola refresh-before-mutate dan storage lock sudah cukup menjaga data tetap sinkron. Jika concurrency makin tinggi, langkah berikutnya adalah mengganti storage adapter ke SQLite/Postgres tanpa mengubah adapter Telegram/Web UI secara besar.
+
+## Checklist Jika Data Tidak Sinkron
+
+1. Pastikan kedua service berjalan dari deployment yang sama.
+2. Pastikan folder `earnapp/` ada di root project.
+3. Cek apakah `EARNAPP_DATA_DIR` berbeda antara service bot dan Web UI.
+4. Restart service jika baru mengganti environment variable.
+5. Cek permission file JSON di data directory.
+
+Contoh cek service:
+
+```bash
+sudo systemctl status earnapp-bot
+sudo systemctl status earnapp-webui
+journalctl -u earnapp-bot -f
+journalctl -u earnapp-webui -f
 ```
-
-### Path File di Bot Telegram:
-```python
-# earnapp_bot.py
-DEVICE_FILE = "devices.json"  # Di root directory
-SCHEDULE_FILE = "schedules.json"  # Di root directory
-# ... dst
-```
-
-**Kedua aplikasi membaca/menulis ke file yang sama!**
-
-## 📊 Contoh Sinkronisasi Real-time
-
-### Skenario 1: Tambah Device
-1. User tambah device "Server1" via Bot Telegram
-2. Bot menyimpan ke `devices.json`
-3. Web UI refresh → Device "Server1" langsung muncul
-4. User bisa langsung kontrol device via Web UI
-
-### Skenario 2: Buat Jadwal Reboot
-1. User buat jadwal reboot setiap hari jam 02:00 via Bot Telegram
-2. Bot menyimpan ke `schedules.json`
-3. Web UI refresh → Jadwal langsung terlihat di Web UI
-4. Bot akan eksekusi jadwal sesuai schedule
-
-### Skenario 3: Start Device
-1. User start device "Server1" via Web UI
-2. Web UI menyimpan log ke `activity_log.json`
-3. Bot membaca log → Activity terlihat di bot
-4. Status device update di kedua interface
-
-## ⚙️ Instalasi Mandiri vs Sinkronisasi
-
-### Yang Mandiri (Tidak Sinkron):
-- ✅ **Virtual Environment** - `webui/venv/` (terpisah dari bot)
-- ✅ **Systemd Service** - `earnapp-webui.service` (terpisah dari `earnapp-bot.service`)
-- ✅ **Dependencies** - Flask dll di venv webui (tidak mengganggu bot)
-
-### Yang Sinkron (Shared):
-- ✅ **devices.json** - Shared
-- ✅ **schedules.json** - Shared
-- ✅ **auto_restart.json** - Shared
-- ✅ **activity_log.json** - Shared
-- ✅ **config.json** - Shared
-
-## 🎯 Kesimpulan
-
-**Web UI dan Bot Telegram:**
-- ✅ **Data 100% sinkron** - Semua perubahan langsung terlihat
-- ✅ **Instalasi mandiri** - Tidak mengganggu satu sama lain
-- ✅ **Bisa berjalan bersamaan** - Tanpa konflik
-- ✅ **Update independen** - Update Web UI tidak mempengaruhi bot
-
-**Best Practice:**
-- Gunakan Web UI untuk monitoring dan quick actions
-- Gunakan Bot Telegram untuk automation dan notifications
-- Keduanya saling melengkapi dengan data yang sinkron!
-
