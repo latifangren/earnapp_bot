@@ -164,8 +164,11 @@ Jika value berbeda antara bot dan Web UI, data tidak akan sinkron.
 1. Jangan commit `config.json`, `devices.json`, atau runtime JSON lain.
 2. `devices.json` bisa berisi password SSH; batasi permission file dan akses server.
 3. Telegram bot hanya menerima admin ID yang dikonfigurasi.
-4. Web UI belum memiliki autentikasi bawaan; lindungi dengan firewall/reverse proxy/auth jika production.
-5. Gunakan SSH key jika memungkinkan.
+4. Web UI memiliki Basic Auth bawaan untuk `/` dan `/api/*`; tanpa `WEBUI_AUTH_PASSWORD`, route protected fail-closed dengan `503`.
+5. Unsafe Web UI API requests membutuhkan header `X-CSRF-Token`; frontend bawaan mengirimkannya otomatis.
+6. Web UI bind default ke `127.0.0.1`; expose network hanya lewat reverse proxy/VPN/firewall yang aman.
+7. CORS default nonaktif dan hanya aktif jika `WEBUI_CORS_ORIGINS` diisi origin eksplisit.
+8. Gunakan SSH key jika memungkinkan.
 
 ## Monitoring
 

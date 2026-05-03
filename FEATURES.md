@@ -85,7 +85,7 @@ Cek kesehatan semua device untuk memastikan koneksi dan status.
 ## ⏰ Scheduled Tasks
 
 ### Deskripsi
-Jadwal otomatis untuk start/stop device (akan tersedia dalam update berikutnya).
+Jadwal otomatis untuk menjalankan start, stop, atau restart pada device tertentu berdasarkan waktu dan hari yang dipilih.
 
 ### Menu Schedule
 - **➕ Add Schedule** - Tambah jadwal baru
@@ -94,7 +94,7 @@ Jadwal otomatis untuk start/stop device (akan tersedia dalam update berikutnya).
 - **⚙️ Settings** - Pengaturan schedule
 
 ### Status
-🔄 **Dalam Pengembangan** - Fitur ini akan tersedia dalam update berikutnya.
+✅ **Tersedia** - Jadwal disimpan di `schedules.json` dan dieksekusi oleh background worker saat bot aktif.
 
 ---
 
@@ -232,19 +232,20 @@ alert_settings = {
 
 ---
 
-## 🔄 Update Roadmap
+## 🔄 Status dan Roadmap
 
-### v1.1.0 (Coming Soon)
+### Tersedia Saat Ini
 - ✅ Scheduled Tasks lengkap
-- ✅ Device grouping
-- ✅ Custom commands
-- ✅ Advanced reporting
-
-### v1.2.0 (Future)
 - ✅ Web dashboard
-- ✅ API endpoints
-- ✅ Mobile app
-- ✅ Cloud sync
+- ✅ API endpoints untuk Web UI
+- ✅ Multi-device health, bulk start/stop/restart, dan activity log
+
+### Future
+- Device grouping
+- Custom commands
+- Advanced reporting
+- Mobile app
+- Cloud sync
 
 ---
 

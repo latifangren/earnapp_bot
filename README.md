@@ -290,6 +290,9 @@ earnapp_bot/
 ## 🔐 Keamanan
 
 - Bot hanya bisa diakses oleh admin yang terdaftar
+- Web UI memakai Basic Auth dan wajib `WEBUI_AUTH_PASSWORD`; tanpa password, route protected fail-closed dengan `503`
+- Web UI bind default ke `127.0.0.1`; expose akses network hanya lewat reverse proxy/VPN/firewall yang aman
+- CORS Web UI default nonaktif dan unsafe API request memakai token CSRF dari frontend bawaan
 - Konfigurasi sensitif disimpan di file terpisah
 - SSH connection menggunakan timeout
 - Error handling untuk mencegah crash

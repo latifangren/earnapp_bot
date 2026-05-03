@@ -175,6 +175,16 @@ Installer utama menyalin folder `webui/` ke `/srv/earnapp_bot/webui`. Web UI dap
 
 Jika Web UI dijalankan dari folder `webui/`, `webui/app.py` akan menambahkan project root ke `sys.path` agar package `earnapp/` tetap bisa diimpor.
 
+Web UI sekarang fail-closed:
+
+- Wajib set `WEBUI_AUTH_PASSWORD` atau route protected akan return `503`.
+- Username default adalah `admin`; override dengan `WEBUI_AUTH_USERNAME` jika perlu.
+- Bind default adalah `127.0.0.1:5000`; expose akses network hanya lewat reverse proxy/VPN/firewall yang aman.
+- CORS default nonaktif; aktifkan hanya dengan `WEBUI_CORS_ORIGINS` berisi origin eksplisit.
+- Frontend bawaan memakai token CSRF untuk request mutasi `/api/*`.
+
+Installer Web UI mandiri (`webui/install.sh`) akan membuat password acak jika `WEBUI_AUTH_PASSWORD` belum disediakan, lalu menulisnya ke root-only env file `/etc/earnapp-webui.env` dengan permission `0600`. Service `earnapp-webui` membaca file tersebut lewat `EnvironmentFile`, sehingga password tidak ditulis langsung di unit systemd dan tidak dicetak ke output installer.
+
 ## Troubleshooting
 
 ### Bot Tidak Start

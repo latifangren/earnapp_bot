@@ -45,6 +45,8 @@ Script ini akan:
 - Membuat virtual environment di `webui/venv`.
 - Install dependencies Web UI termasuk Flask.
 - Membuat systemd service `earnapp-webui`.
+- Mengisi `WEBUI_AUTH_PASSWORD` lewat root-only env file `/etc/earnapp-webui.env`. Jika env tersebut belum disediakan, installer membuat password acak dan menyimpan file dengan permission `0600`.
+- Bind Web UI ke `127.0.0.1:5000` secara default.
 - Menjalankan Web UI dari root project yang sama dengan bot.
 
 Setelah instalasi:
@@ -86,23 +88,64 @@ chmod +x run.sh
 bash run.sh
 ```
 
-Web UI berjalan di `http://localhost:5000` secara default.
+Web UI berjalan di `http://127.0.0.1:5000` secara default.
 
 ## Akses Web UI
 
-- Local: `http://localhost:5000`
-- Network: `http://YOUR_SERVER_IP:5000`
+- Local: `http://127.0.0.1:5000`
+- Network: expose only via reverse proxy/VPN, atau override `WEBUI_HOST` jika benar-benar diperlukan.
 
-## Konfigurasi Port
+## Konfigurasi Akses dan Port
 
-Port default ada di bagian akhir `webui/app.py`:
+Web UI memakai Basic Auth browser-friendly untuk `/` dan semua `/api/*`.
+Unsafe API request (`POST`, `PUT`, `PATCH`, `DELETE`) juga wajib mengirim header `X-CSRF-Token`. Frontend bawaan mengambil token dari meta tag halaman dan menambahkannya otomatis ke setiap request mutasi.
+
+Wajib set password autentikasi lewat environment:
+
+```bash
+export WEBUI_AUTH_PASSWORD='ganti-password-ini'
+```
+
+Opsional:
+
+- `WEBUI_AUTH_USERNAME` untuk mengganti username (default: `admin`).
+- `WEBUI_HOST` untuk bind address (default: `127.0.0.1`).
+- `WEBUI_PORT` untuk port (default: `5000`).
+- `WEBUI_CORS_ORIGINS` untuk mengaktifkan CORS API secara eksplisit, isi daftar origin dipisah koma.
+
+Jika `WEBUI_AUTH_PASSWORD` tidak di-set, request ke route protected akan ditolak dengan respons `503`.
+
+Contoh systemd environment:
+
+```ini
+EnvironmentFile=/etc/earnapp-webui.env
+```
+
+Isi env file hanya boleh dibaca root/service admin:
+
+```ini
+WEBUI_AUTH_USERNAME=admin
+WEBUI_AUTH_PASSWORD=ganti-password-ini
+WEBUI_HOST=127.0.0.1
+WEBUI_PORT=5000
+```
+
+Port dan bind default di `webui/app.py`:
 
 ```python
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000, debug=debug_mode)
+    app.run(host='127.0.0.1', port=5000, debug=debug_mode)
 ```
 
-Ubah `port=5000` jika diperlukan.
+Contoh expose aman via reverse proxy:
+
+```bash
+WEBUI_AUTH_PASSWORD='ganti-password-ini' \
+WEBUI_HOST=127.0.0.1 \
+WEBUI_PORT=5000 \
+WEBUI_CORS_ORIGINS='https://dashboard.example.com' \
+python3 app.py
+```
 
 ## Struktur File
 
@@ -126,13 +169,13 @@ webui/
 
 ## Keamanan
 
-PENTING: Web UI belum memiliki autentikasi bawaan. Untuk production, gunakan minimal salah satu perlindungan berikut:
+PENTING:
 
-1. Firewall allowlist.
-2. Reverse proxy dengan basic auth atau SSO.
-3. HTTPS.
-4. Rate limiting.
-5. Akses hanya dari VPN/private network.
+1. Set `WEBUI_AUTH_PASSWORD` sebelum start Web UI.
+2. Jangan bind ke `0.0.0.0` kecuali sudah di belakang reverse proxy/firewall yang aman.
+3. CORS default nonaktif; aktifkan hanya lewat `WEBUI_CORS_ORIGINS` jika memang perlu.
+4. Untuk client selain frontend bawaan, ambil CSRF token dari halaman `/` lalu kirim sebagai `X-CSRF-Token` pada request mutasi `/api/*`.
+5. `GET /api/devices` sudah meredaksi field sensitif seperti `password`, `token`, `secret`, `private_key`, `passphrase`, dan `api_key`.
 
 ## Integrasi dengan Bot Telegram
 
@@ -160,6 +203,7 @@ Web UI menyediakan endpoint berikut:
 - `POST /api/devices/<device_name>/start` - start device.
 - `POST /api/devices/<device_name>/stop` - stop device.
 - `POST /api/devices/<device_name>/restart` - restart device.
+- `POST /api/devices/all/restart` - restart semua device lewat shared core use-case.
 - `POST /api/devices/all/start` - start semua device.
 - `POST /api/devices/all/stop` - stop semua device.
 - `POST /api/devices/all/health-check` - health check semua device.
