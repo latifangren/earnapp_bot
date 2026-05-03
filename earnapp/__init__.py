@@ -1,0 +1,1 @@
+"""EarnApp Bot reusable package."""
