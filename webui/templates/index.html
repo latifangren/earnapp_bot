@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token }}">
     <title>EarnApp Bot - Web UI</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css">
@@ -16,10 +17,10 @@
             </span>
             <div class="d-flex gap-2 align-items-center">
                 <span class="badge bg-light text-dark" id="device-count">0 Devices</span>
-                <button class="btn btn-outline-light btn-sm" onclick="toggleDarkMode()" id="dark-mode-toggle" title="Toggle Dark Mode">
+                <button type="button" class="btn btn-outline-light btn-sm" onclick="toggleDarkMode()" id="dark-mode-toggle" title="Toggle Dark Mode">
                     <i class="bi bi-moon-fill" id="dark-mode-icon"></i>
                 </button>
-                <button class="btn btn-outline-light btn-sm" onclick="refreshAll()">
+                <button type="button" class="btn btn-outline-light btn-sm" onclick="refreshAll()">
                     <i class="bi bi-arrow-clockwise"></i> Refresh
                 </button>
             </div>
@@ -87,25 +88,25 @@
         <div class="card mb-3 shadow-sm">
             <div class="card-body">
                 <div class="d-flex flex-wrap gap-2">
-                    <button class="btn btn-success btn-sm" onclick="startAllDevices()">
+                    <button type="button" class="btn btn-success btn-sm" onclick="startAllDevices()">
                         <i class="bi bi-play-circle"></i> Start All
                     </button>
-                    <button class="btn btn-danger btn-sm" onclick="stopAllDevices()">
+                    <button type="button" class="btn btn-danger btn-sm" onclick="stopAllDevices()">
                         <i class="bi bi-stop-circle"></i> Stop All
                     </button>
-                    <button class="btn btn-warning btn-sm" onclick="quickRestartAll()">
+                    <button type="button" class="btn btn-warning btn-sm" onclick="quickRestartAll()">
                         <i class="bi bi-arrow-repeat"></i> Quick Restart All
                     </button>
-                    <button class="btn btn-info btn-sm" onclick="healthCheckAll()">
+                    <button type="button" class="btn btn-info btn-sm" onclick="healthCheckAll()">
                         <i class="bi bi-heart-pulse"></i> Health Check
                     </button>
-                    <button class="btn btn-primary btn-sm" onclick="showAddDeviceModal()">
+                    <button type="button" class="btn btn-primary btn-sm" onclick="showAddDeviceModal()">
                         <i class="bi bi-plus-circle"></i> Add Device
                     </button>
-                    <button class="btn btn-secondary btn-sm" onclick="showScheduleModal()">
+                    <button type="button" class="btn btn-secondary btn-sm" onclick="showScheduleModal()">
                         <i class="bi bi-clock"></i> Schedule
                     </button>
-                    <button class="btn btn-dark btn-sm" onclick="showAutoRestartModal()">
+                    <button type="button" class="btn btn-dark btn-sm" onclick="showAutoRestartModal()">
                         <i class="bi bi-arrow-repeat"></i> Auto Restart
                     </button>
                 </div>
@@ -183,7 +184,7 @@
                             <!-- Schedules Tab -->
                             <div class="tab-pane fade" id="schedules-tab" role="tabpanel">
                                 <div class="mb-3">
-                                    <button class="btn btn-primary btn-sm" onclick="showAddScheduleModal()">
+                                    <button type="button" class="btn btn-primary btn-sm" onclick="showAddScheduleModal()">
                                         <i class="bi bi-plus-circle"></i> Add Time Schedule
                                     </button>
                                 </div>
@@ -195,7 +196,7 @@
                             <!-- Auto Restart Tab -->
                             <div class="tab-pane fade" id="auto-restart-tab" role="tabpanel">
                                 <div class="mb-3">
-                                    <button class="btn btn-primary btn-sm" onclick="showSetAutoRestartModal()">
+                                    <button type="button" class="btn btn-primary btn-sm" onclick="showSetAutoRestartModal()">
                                         <i class="bi bi-plus-circle"></i> Set Auto Restart
                                     </button>
                                 </div>

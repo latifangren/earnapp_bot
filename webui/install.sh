@@ -98,6 +98,28 @@ chmod +x run.sh
 # Buat systemd service
 echo "🔧 Membuat systemd service..."
 SERVICE_USER=${SUDO_USER:-$USER}
+WEBUI_AUTH_USERNAME=${WEBUI_AUTH_USERNAME:-admin}
+WEBUI_AUTH_PASSWORD=${WEBUI_AUTH_PASSWORD:-$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')}
+WEBUI_HOST=${WEBUI_HOST:-127.0.0.1}
+WEBUI_PORT=${WEBUI_PORT:-5000}
+WEBUI_ENV_FILE=${WEBUI_ENV_FILE:-/etc/earnapp-webui.env}
+install -m 600 -o root -g root /dev/null "$WEBUI_ENV_FILE"
+WEBUI_ENV_FILE="$WEBUI_ENV_FILE" \
+WEBUI_AUTH_USERNAME="$WEBUI_AUTH_USERNAME" \
+WEBUI_AUTH_PASSWORD="$WEBUI_AUTH_PASSWORD" \
+WEBUI_HOST="$WEBUI_HOST" \
+WEBUI_PORT="$WEBUI_PORT" \
+python3 << 'PY'
+import os
+import shlex
+
+path = os.environ["WEBUI_ENV_FILE"]
+keys = ["WEBUI_AUTH_USERNAME", "WEBUI_AUTH_PASSWORD", "WEBUI_HOST", "WEBUI_PORT"]
+with open(path, "w") as handle:
+    for key in keys:
+        handle.write("{0}={1}\n".format(key, shlex.quote(os.environ[key])))
+os.chmod(path, 0o600)
+PY
 cat > /etc/systemd/system/earnapp-webui.service << EOF
 [Unit]
 Description=EarnApp Bot Web UI Service
@@ -108,6 +130,7 @@ Type=simple
 User=$SERVICE_USER
 WorkingDirectory=$WEBUI_DIR
 Environment=PATH=$WEBUI_DIR/venv/bin:/usr/bin:/usr/local/bin:/bin:/usr/sbin:/sbin
+EnvironmentFile=$WEBUI_ENV_FILE
 ExecStart=$WEBUI_DIR/venv/bin/python $WEBUI_DIR/app.py
 Restart=always
 RestartSec=10
@@ -124,7 +147,11 @@ echo "✅ Instalasi Web UI selesai!"
 echo ""
 echo "📝 Langkah selanjutnya:"
 echo "1. Edit file $ROOT_DIR/config.json (jika belum)"
-echo "2. Start Web UI service"
+echo "2. Simpan kredensial Web UI di tempat aman"
+echo "   Username: $WEBUI_AUTH_USERNAME"
+echo "   Password tersimpan di root-only env file: $WEBUI_ENV_FILE"
+echo "   Ambil password dengan: sudo sed -n 's/^WEBUI_AUTH_PASSWORD=//p' $WEBUI_ENV_FILE"
+echo "3. Start Web UI service"
 echo ""
 echo "🚀 Cara menjalankan Web UI:"
 echo ""
@@ -143,10 +170,9 @@ echo "   cd $WEBUI_DIR && ./run.sh"
 echo "   (Tekan Ctrl+A lalu D untuk detach)"
 echo ""
 echo "🌐 Web UI akan berjalan di:"
-echo "   http://localhost:5000"
-echo "   http://YOUR_SERVER_IP:5000"
+echo "   http://$WEBUI_HOST:$WEBUI_PORT"
+echo "   Default bind hanya localhost. Expose lewat reverse proxy/VPN jika perlu akses network."
 echo ""
 echo "📋 Log Web UI:"
 echo "- Systemd: journalctl -u earnapp-webui -f"
 echo "- Nohup: tail -f $WEBUI_DIR/webui.log"
-
