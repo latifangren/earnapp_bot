@@ -82,6 +82,14 @@ journalctl -u earnapp-webui -f
 
 ### Development
 
+Set `WEBUI_AUTH_PASSWORD` dulu, atau source env file installer jika user saat ini boleh membacanya:
+
+```bash
+export WEBUI_AUTH_PASSWORD='ganti-password-ini'
+# atau, jika file readable untuk user saat ini:
+# set -a && . /etc/earnapp-webui.env && set +a
+```
+
 ```bash
 cd /srv/earnapp_bot/webui
 chmod +x run.sh
@@ -111,7 +119,7 @@ Opsional:
 - `WEBUI_AUTH_USERNAME` untuk mengganti username (default: `admin`).
 - `WEBUI_HOST` untuk bind address (default: `127.0.0.1`).
 - `WEBUI_PORT` untuk port (default: `5000`).
-- `WEBUI_CORS_ORIGINS` untuk mengaktifkan CORS API secara eksplisit, isi daftar origin dipisah koma.
+- `WEBUI_CORS_ORIGINS` untuk mengaktifkan CORS API secara eksplisit, isi daftar origin dipisah koma. Tambahkan manual ke `/etc/earnapp-webui.env` jika memakai systemd.
 
 Jika `WEBUI_AUTH_PASSWORD` tidak di-set, request ke route protected akan ditolak dengan respons `503`.
 

@@ -16,6 +16,19 @@ else
     WEBUI_DIR="$(pwd)/webui"
 fi
 
+WEBUI_ENV_FILE=${WEBUI_ENV_FILE:-/etc/earnapp-webui.env}
+if [ -z "$WEBUI_AUTH_PASSWORD" ]; then
+    if [ -r "$WEBUI_ENV_FILE" ]; then
+        echo "🔐 Memuat konfigurasi Web UI dari $WEBUI_ENV_FILE..."
+        set -a
+        . "$WEBUI_ENV_FILE"
+        set +a
+    else
+        echo "⚠️  WEBUI_AUTH_PASSWORD belum di-set. Web UI akan fail-closed dengan 503."
+        echo "   Set env ini dulu, atau jalankan dari systemd service yang memakai /etc/earnapp-webui.env."
+    fi
+fi
+
 # Cek apakah venv ada (prioritas: venv di webui, lalu venv di parent)
 if [ -d "$WEBUI_DIR/venv" ]; then
     VENV_DIR="$WEBUI_DIR/venv"

@@ -5,6 +5,16 @@
 
 echo "🗑️  Memulai uninstall EarnApp Bot Web UI..."
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [ -f "$SCRIPT_DIR/app.py" ]; then
+    WEBUI_DIR="$SCRIPT_DIR"
+elif [ -f "$SCRIPT_DIR/webui/app.py" ]; then
+    WEBUI_DIR="$SCRIPT_DIR/webui"
+else
+    WEBUI_DIR="$(pwd)"
+fi
+WEBUI_ENV_FILE=${WEBUI_ENV_FILE:-/etc/earnapp-webui.env}
+
 # Stop dan disable service
 if systemctl is-active --quiet earnapp-webui; then
     echo "🛑 Menghentikan service..."
@@ -23,12 +33,23 @@ if [ -f "/etc/systemd/system/earnapp-webui.service" ]; then
     systemctl daemon-reload
 fi
 
+if [ -f "$WEBUI_ENV_FILE" ]; then
+    read -p "🗑️  Hapus env file Web UI $WEBUI_ENV_FILE? (Y/n): " -n 1 -r
+    echo
+    if [[ ! $REPLY =~ ^[Nn]$ ]]; then
+        rm -f "$WEBUI_ENV_FILE"
+        echo "✅ Env file Web UI dihapus"
+    else
+        echo "ℹ️ Env file Web UI dipertahankan"
+    fi
+fi
+
 # Konfirmasi hapus file
 read -p "⚠️  Apakah Anda yakin ingin menghapus semua file Web UI? (y/N): " -n 1 -r
 echo
 if [[ $REPLY =~ ^[Yy]$ ]]; then
-    WEBUI_DIR=$(pwd)
     echo "🗑️  Menghapus file Web UI dari $WEBUI_DIR..."
+    cd "$WEBUI_DIR"
     
     # Hapus venv
     if [ -d "venv" ]; then
@@ -50,4 +71,3 @@ fi
 
 echo ""
 echo "✅ Uninstall selesai!"
-

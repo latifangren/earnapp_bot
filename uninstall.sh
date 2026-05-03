@@ -16,28 +16,39 @@ fi
 echo "🛑 Menghentikan service..."
 
 # Stop dan disable service
-if systemctl is-active --quiet earnapp-bot; then
-    echo "⏹️ Menghentikan earnapp-bot service..."
-    systemctl stop earnapp-bot
-else
-    echo "ℹ️ Service earnapp-bot sudah berhenti."
-fi
+for service_name in earnapp-bot earnapp-webui; do
+    if systemctl is-active --quiet "$service_name"; then
+        echo "⏹️ Menghentikan $service_name service..."
+        systemctl stop "$service_name"
+    else
+        echo "ℹ️ Service $service_name sudah berhenti."
+    fi
 
-if systemctl is-enabled --quiet earnapp-bot; then
-    echo "🔌 Menonaktifkan earnapp-bot service..."
-    systemctl disable earnapp-bot
-else
-    echo "ℹ️ Service earnapp-bot sudah dinonaktifkan."
-fi
+    if systemctl is-enabled --quiet "$service_name"; then
+        echo "🔌 Menonaktifkan $service_name service..."
+        systemctl disable "$service_name"
+    else
+        echo "ℹ️ Service $service_name sudah dinonaktifkan."
+    fi
+done
 
 echo "🗑️ Menghapus service file..."
 
 # Hapus service file
-if [ -f "/etc/systemd/system/earnapp-bot.service" ]; then
-    rm /etc/systemd/system/earnapp-bot.service
-    echo "✅ Service file dihapus."
-else
-    echo "ℹ️ Service file tidak ditemukan."
+for service_file in /etc/systemd/system/earnapp-bot.service /etc/systemd/system/earnapp-webui.service; do
+    if [ -f "$service_file" ]; then
+        rm "$service_file"
+        echo "✅ Service file $service_file dihapus."
+    else
+        echo "ℹ️ Service file $service_file tidak ditemukan."
+    fi
+done
+
+# Hapus credential env file Web UI jika ada
+WEBUI_ENV_FILE=${WEBUI_ENV_FILE:-/etc/earnapp-webui.env}
+if [ -f "$WEBUI_ENV_FILE" ]; then
+    rm -f "$WEBUI_ENV_FILE"
+    echo "✅ Env file Web UI $WEBUI_ENV_FILE dihapus."
 fi
 
 echo "🔄 Reload systemd daemon..."
@@ -119,6 +130,7 @@ echo "🧹 Membersihkan log systemd..."
 if command -v journalctl >/dev/null 2>&1; then
     echo "🗑️ Menghapus log systemd untuk earnapp-bot..."
     journalctl --vacuum-time=1s --unit=earnapp-bot >/dev/null 2>&1 || true
+    journalctl --vacuum-time=1s --unit=earnapp-webui >/dev/null 2>&1 || true
     echo "✅ Log systemd dibersihkan."
 fi
 
@@ -194,9 +206,21 @@ else
 fi
 
 if [ -f "/etc/systemd/system/earnapp-bot.service" ]; then
-    echo "❌ Peringatan: Service file masih ada!"
+    echo "❌ Peringatan: Service file earnapp-bot masih ada!"
 else
-    echo "✅ Service file sudah dihapus."
+    echo "✅ Service file earnapp-bot sudah dihapus."
+fi
+
+if [ -f "/etc/systemd/system/earnapp-webui.service" ]; then
+    echo "❌ Peringatan: Service file earnapp-webui masih ada!"
+else
+    echo "✅ Service file earnapp-webui sudah dihapus."
+fi
+
+if [ -f "$WEBUI_ENV_FILE" ]; then
+    echo "❌ Peringatan: Env file Web UI masih ada!"
+else
+    echo "✅ Env file Web UI sudah dihapus."
 fi
 
 if systemctl is-active --quiet earnapp-bot 2>/dev/null; then
@@ -205,12 +229,19 @@ else
     echo "✅ Service sudah dihentikan."
 fi
 
+if systemctl is-active --quiet earnapp-webui 2>/dev/null; then
+    echo "❌ Peringatan: Service Web UI masih aktif!"
+else
+    echo "✅ Service Web UI sudah dihentikan."
+fi
+
 echo ""
 echo "🎉 Uninstall EarnApp Bot selesai!"
 echo ""
 echo "📋 Ringkasan:"
 echo "✅ Service dihentikan dan dinonaktifkan"
-echo "✅ File service dihapus"
+echo "✅ File service bot dan Web UI dihapus"
+echo "✅ Env file Web UI dihapus"
 echo "✅ Direktori bot dihapus"
 echo "✅ Log dibersihkan"
 echo "✅ Process dihentikan"

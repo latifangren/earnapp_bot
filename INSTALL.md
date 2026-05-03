@@ -269,7 +269,11 @@ sudo bash /srv/earnapp_bot/uninstall.sh
 ```bash
 sudo systemctl stop earnapp-bot
 sudo systemctl disable earnapp-bot
+sudo systemctl stop earnapp-webui 2>/dev/null || true
+sudo systemctl disable earnapp-webui 2>/dev/null || true
 sudo rm /etc/systemd/system/earnapp-bot.service
+sudo rm /etc/systemd/system/earnapp-webui.service 2>/dev/null || true
+sudo rm /etc/earnapp-webui.env 2>/dev/null || true
 sudo systemctl daemon-reload
 sudo rm -rf /srv/earnapp_bot
 ```
