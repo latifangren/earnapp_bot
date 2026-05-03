@@ -3,17 +3,36 @@ import os
 import json
 import telebot
 import subprocess
+import sys
 from telebot import types
-import paramiko
 import time
 import threading
 
+from earnapp.core.executors import AdbExecutor, LocalExecutor, SshExecutor
+from earnapp.core.storage import JsonStorage
+from earnapp.core.use_cases import (
+    format_adb_result as format_adb_result_use_case,
+    get_adb_app_status as get_adb_app_status_use_case,
+    get_all_device_statuses as get_all_device_statuses_use_case,
+    get_device_health as get_device_health_use_case,
+    get_device_id as get_device_id_use_case,
+    get_ssh_earnapp_status as get_ssh_earnapp_status_use_case,
+    record_activity as record_activity_use_case,
+    run_device_command_by_name as run_device_command_by_name_use_case,
+    start_all_devices as start_all_devices_use_case,
+    start_device as start_device_use_case,
+    stop_all_devices as stop_all_devices_use_case,
+    stop_device as stop_device_use_case,
+)
+from earnapp.core.workers import start_workers
+
+storage = JsonStorage()
+
 # Load konfigurasi dari file
 def load_config():
-    config_file = "config.json"
+    config_file = storage.path_for("config.json")
     if os.path.exists(config_file):
-        with open(config_file, "r") as f:
-            return json.load(f)
+        return storage.load_config()
     else:
         print("❌ File config.json tidak ditemukan!")
         print("📝 Buat file config.json dengan format:")
@@ -39,20 +58,16 @@ EARN_APP_ACTIVITY = "com.brd.earnrewards/.ConsentActivity"
 # -----------------------
 # File untuk menyimpan device
 # -----------------------
-DEVICE_FILE = "devices.json"
+DEVICE_FILE = storage.path_for("devices.json")
 
 # Load device dari JSON jika ada
 if os.path.exists(DEVICE_FILE):
-    with open(DEVICE_FILE, "r") as f:
-        devices = json.load(f)
+    devices = storage.load_devices()
 else:
     # Device default: lokal
-    devices = {
-        "Local": {"type": "local", "path": "/usr/bin"}
-    }
+    devices = storage.load_devices()
     # Simpan file devices.json default
-    with open(DEVICE_FILE, "w") as f:
-        json.dump(devices, f, indent=2)
+    storage.save_devices(devices)
 
 # Menyimpan device yang dipilih tiap chat_id
 user_device = {}
@@ -64,14 +79,13 @@ add_device_state = {}  # chat_id -> {"step":1..4, "data":{}}
 remove_device_state = {}  # chat_id -> True
 
 # Menyimpan scheduled tasks (time-based)
-SCHEDULE_FILE = "schedules.json"
+SCHEDULE_FILE = storage.path_for("schedules.json")
 scheduled_tasks = {}  # task_id -> {"device": "name", "action": "restart/start/stop", "time": "HH:MM", "days": [0,1,2,3,4,5,6], "enabled": True, "timezone": "UTC"}
 
 # Load scheduled tasks dari file
 if os.path.exists(SCHEDULE_FILE):
     try:
-        with open(SCHEDULE_FILE, "r") as f:
-            scheduled_tasks = json.load(f)
+        scheduled_tasks = storage.load_schedules()
     except Exception as e:
         print(f"Error loading schedules.json: {e}")
         scheduled_tasks = {}
@@ -83,14 +97,13 @@ schedule_state = {}  # chat_id -> {"step": 1..5, "data": {}}
 filter_date_state = {}  # chat_id -> True
 
 # Menyimpan auto restart interval settings
-AUTO_RESTART_FILE = "auto_restart.json"
+AUTO_RESTART_FILE = storage.path_for("auto_restart.json")
 auto_restart_settings = {}  # device_name -> {"enabled": True/False, "interval_hours": 6, "delay_seconds": 5, "last_run": timestamp}
 
 # Load auto restart settings dari file
 if os.path.exists(AUTO_RESTART_FILE):
     try:
-        with open(AUTO_RESTART_FILE, "r") as f:
-            auto_restart_settings = json.load(f)
+        auto_restart_settings = storage.load_auto_restart()
     except Exception as e:
         print(f"Error loading auto_restart.json: {e}")
         auto_restart_settings = {}
@@ -109,14 +122,13 @@ alert_settings = {
 }
 
 # Activity Log & History
-ACTIVITY_LOG_FILE = "activity_log.json"
+ACTIVITY_LOG_FILE = storage.path_for("activity_log.json")
 activity_logs = []  # List of logs: [{"timestamp": timestamp, "device": "name", "action": "start/stop/restart", "result": "result", "user": "admin", "type": "manual/auto/scheduled"}]
 
 # Load activity logs dari file
 if os.path.exists(ACTIVITY_LOG_FILE):
     try:
-        with open(ACTIVITY_LOG_FILE, "r") as f:
-            activity_logs = json.load(f)
+        activity_logs = storage.load_activity_log()
     except Exception as e:
         print(f"Error loading activity_log.json: {e}")
         activity_logs = []
@@ -124,377 +136,158 @@ if os.path.exists(ACTIVITY_LOG_FILE):
 # Limit jumlah log (keep last 1000 entries)
 MAX_LOG_ENTRIES = 1000
 
+
+def _replace_mapping(target, source):
+    if source is None:
+        source = {}
+    target.clear()
+    target.update(source)
+    return target
+
+
+def _replace_list(target, source):
+    if source is None:
+        source = []
+    target[:] = source
+    return target
+
+
+def _load_mapping_into(target, load_fn, label):
+    try:
+        loaded = load_fn()
+        if not isinstance(loaded, dict):
+            print(f"Error loading {label}: expected object")
+            return target
+        return _replace_mapping(target, loaded)
+    except Exception as e:
+        print(f"Error loading {label}: {e}")
+        return target
+
+
+def _load_list_into(target, load_fn, label):
+    try:
+        loaded = load_fn()
+        if not isinstance(loaded, list):
+            print(f"Error loading {label}: expected list")
+            return target
+        return _replace_list(target, loaded)
+    except Exception as e:
+        print(f"Error loading {label}: {e}")
+        return target
+
+
+def refresh_devices():
+    return _load_mapping_into(devices, storage.load_devices, "devices.json")
+
+
+def refresh_schedules():
+    return _load_mapping_into(scheduled_tasks, storage.load_schedules, "schedules.json")
+
+
+def refresh_auto_restart_settings():
+    return _load_mapping_into(auto_restart_settings, storage.load_auto_restart, "auto_restart.json")
+
+
+def refresh_activity_logs():
+    return _load_list_into(activity_logs, storage.load_activity_log, "activity_log.json")
+
+
+def refresh_runtime_state():
+    refresh_devices()
+    refresh_schedules()
+    refresh_auto_restart_settings()
+    refresh_activity_logs()
+
+
+def _payload_results(payload):
+    results = payload.get("results", []) if isinstance(payload, dict) else []
+    return results if isinstance(results, list) else []
+
+
+def _text_result(value):
+    return str(value if value is not None else "")
+
+
+def is_known_device_message(message):
+    refresh_devices()
+    return message.text in devices
+
 # -----------------------
 # Fungsi menjalankan perintah
 # -----------------------
 def run_cmd_local(cmd):
-    try:
-        # Pakai path absolut ke earnapp untuk command yang mulai dengan 'earnapp'
-        if cmd.startswith("earnapp"):
-            which_result = subprocess.run("which earnapp", shell=True, capture_output=True, text=True)
-            if which_result.returncode == 0:
-                earnapp_path = which_result.stdout.strip()
-                if cmd.startswith("earnapp "):
-                    cmd = cmd.replace("earnapp ", f"{earnapp_path} ", 1)
-                elif cmd.strip() == "earnapp":
-                    cmd = earnapp_path
-            else:
-                return "❌ EarnApp tidak ditemukan di sistem. Pastikan EarnApp sudah terinstall dan ada di PATH."
-        out = subprocess.check_output(cmd, shell=True, stderr=subprocess.STDOUT, text=True)
-        return out.strip()
-    except subprocess.CalledProcessError as e:
-        return (e.output or str(e)).strip()
+    executor = LocalExecutor(
+        missing_earnapp_message="❌ EarnApp tidak ditemukan di sistem. Pastikan EarnApp sudah terinstall dan ada di PATH."
+    )
+    return executor.execute(cmd)
 
 def run_cmd_ssh(host, port, username, password, cmd, timeout=20):
-    try:
-        ssh = paramiko.SSHClient()
-        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
-        ssh.connect(hostname=host, port=port, username=username, password=password, timeout=timeout)
-        stdin, stdout, stderr = ssh.exec_command(cmd)
-        out = stdout.read().decode()
-        err = stderr.read().decode()
-        ssh.close()
-        combined = (out + ("\n" + err if err else "")).strip()
-        return combined if combined else "(no output)"
-    except Exception as e:
-        return f"❌ SSH error: {e}"
+    return SshExecutor(host, port, username, password).execute(cmd, timeout=timeout)
 
 def run_cmd_adb(host, port, cmd, timeout=20):
     """Jalankan command ADB via wireless"""
-    try:
-        # Connect ke device ADB via wireless (jika belum connected)
-        connect_cmd = f"adb connect {host}:{port}"
-        connect_result = subprocess.run(connect_cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        
-        # Jika cmd sudah mengandung "shell", langsung gunakan, jika tidak tambahkan "shell"
-        if cmd.startswith("shell "):
-            adb_cmd = f"adb -s {host}:{port} {cmd}"
-        else:
-            adb_cmd = f"adb -s {host}:{port} shell {cmd}"
-        
-        result = subprocess.run(adb_cmd, shell=True, capture_output=True, text=True, timeout=timeout)
-        
-        output = result.stdout.strip()
-        error = result.stderr.strip()
-        combined = (output + ("\n" + error if error else "")).strip()
-        
-        return combined if combined else "(no output)"
-    except subprocess.TimeoutExpired:
-        return f"❌ ADB timeout: Command melebihi {timeout} detik"
-    except Exception as e:
-        return f"❌ ADB error: {e}"
+    return AdbExecutor(host, port).execute(cmd, timeout=timeout)
 
 def run_cmd_device(chat_id, cmd):
+    refresh_devices()
     dev_name = user_device.get(chat_id)
     if not dev_name:
         return "❌ Device belum dipilih. Gunakan /start untuk memilih device."
     if dev_name not in devices:
         return f"❌ Device '{dev_name}' tidak ditemukan."
-
-    dev = devices[dev_name]
-    if dev["type"] == "local":
-        path = dev.get("path", ".")
-        full_cmd = f"cd {path} && {cmd}"
-        return run_cmd_local(full_cmd)
-    elif dev["type"] == "ssh":
-        host = dev.get("host")
-        port = dev.get("port", 22)
-        user = dev.get("user")
-        password = dev.get("password")
-        return run_cmd_ssh(host, port, user, password, cmd)
-    elif dev["type"] == "adb":
-        host = dev.get("host")
-        port = dev.get("port", 5555)
-        return run_cmd_adb(host, port, cmd)
-    else:
-        return "❌ Tipe device tidak dikenali."
+    return run_cmd_device_by_name(dev_name, cmd)
 
 def run_cmd_device_by_name(device_name, cmd):
     """Jalankan command di device tertentu berdasarkan nama"""
-    if device_name not in devices:
-        return f"❌ Device '{device_name}' tidak ditemukan."
-
-    dev = devices[device_name]
-    if dev["type"] == "local":
-        path = dev.get("path", ".")
-        full_cmd = f"cd {path} && {cmd}"
-        return run_cmd_local(full_cmd)
-    elif dev["type"] == "ssh":
-        host = dev.get("host")
-        port = dev.get("port", 22)
-        user = dev.get("user")
-        password = dev.get("password")
-        return run_cmd_ssh(host, port, user, password, cmd)
-    elif dev["type"] == "adb":
-        host = dev.get("host")
-        port = dev.get("port", 5555)
-        return run_cmd_adb(host, port, cmd)
-    else:
-        return "❌ Tipe device tidak dikenali."
+    return run_device_command_by_name_use_case(storage, device_name, cmd)
 
 def get_ssh_earnapp_status(device_name):
     """Cek status EarnApp via SSH (return simple status)"""
-    if device_name not in devices:
-        return None
-    
-    dev = devices[device_name]
-    if dev.get("type") not in ["ssh", "local"]:
-        return None
-    
-    try:
-        # Prioritas: gunakan output dari earnapp status command
-        status_cmd = "earnapp status"
-        status_result = run_cmd_device_by_name(device_name, status_cmd)
-        
-        if status_result and "error" not in status_result.lower():
-            # Parse output earnapp status
-            status_lower = status_result.lower()
-            
-            # Cek status: enabled/disabled/running/stopped
-            if "status: enabled" in status_lower or "status: running" in status_lower or "enabled" in status_lower:
-                return "🟢 Running"
-            elif "status: disabled" in status_lower or "status: stopped" in status_lower or "disabled" in status_lower:
-                return "🔴 Stopped"
-            elif "checking" in status_lower or "- checking status" in status_lower:
-                # Jika masih checking, gunakan fallback method
-                pass
-            elif "running" in status_lower and "not" not in status_lower:
-                return "🟢 Running"
-            elif "stopped" in status_lower or "stop" in status_lower:
-                return "🔴 Stopped"
-        
-        # Fallback: cek process earnapp jika status command tidak jelas
-        cmd = "pgrep -f earnapp || ps aux | grep -i earnapp | grep -v grep"
-        result = run_cmd_device_by_name(device_name, cmd)
-        
-        if result and result.strip() and "error" not in result.lower():
-            # Jika ada process, cek lagi dengan earnapp status
-            # Tapi jangan langsung return Running, karena bisa jadi process masih ada tapi disabled
-            status_cmd2 = "earnapp status 2>&1"
-            status_result2 = run_cmd_device_by_name(device_name, status_cmd2)
-            if status_result2:
-                status_lower2 = status_result2.lower()
-                if "disabled" in status_lower2:
-                    return "🔴 Stopped"
-                elif "enabled" in status_lower2 or "running" in status_lower2:
-                    return "🟢 Running"
-        
-        # Jika tidak ada process, cek apakah earnapp terinstall
-        check_cmd = "which earnapp || command -v earnapp"
-        check_result = run_cmd_device_by_name(device_name, check_cmd)
-        
-        if check_result and "earnapp" in check_result and "error" not in check_result.lower():
-            return "🔴 Stopped"
-        else:
-            return "❌ Not installed"
-    except Exception as e:
-        return f"❌ Error: {str(e)[:50]}"
+    return get_ssh_earnapp_status_use_case(storage, device_name)
 
 def get_adb_app_status(device_name):
     """Cek status EarnApp via ADB (return simple status)"""
-    if device_name not in devices:
-        return "❌ Device tidak ditemukan"
-    
-    dev = devices[device_name]
-    if dev.get("type") != "adb":
-        return None
-    
-    try:
-        # Cek apakah app running
-        cmd = f"pidof {EARN_APP_PACKAGE}"
-        result = run_cmd_device_by_name(device_name, cmd)
-        
-        if result and result.strip() and not "error" in result.lower() and result.strip().isdigit():
-            return "🟢 Running"
-        else:
-            # Cek apakah app terinstall
-            check_cmd = f"pm list packages | grep {EARN_APP_PACKAGE}"
-            check_result = run_cmd_device_by_name(device_name, check_cmd)
-            if EARN_APP_PACKAGE in check_result:
-                return "🔴 Stopped"
-            else:
-                return "❌ Not installed"
-    except Exception as e:
-        return f"❌ Error: {str(e)[:50]}"
+    return get_adb_app_status_use_case(storage, device_name)
 
 def format_adb_result(action, result, device_name):
     """Format hasil ADB command menjadi pesan yang lebih simple"""
-    if not result or result == "(no output)":
-        if action == "start":
-            status = get_adb_app_status(device_name)
-            if status and "Running" in status:
-                return f"✅ EarnApp berhasil dijalankan\n\nStatus: {status}"
-            else:
-                return f"⚠️ EarnApp mungkin sudah berjalan atau ada masalah\n\nStatus: {status or 'Unknown'}"
-        elif action == "stop":
-            status = get_adb_app_status(device_name)
-            if status and "Stopped" in status:
-                return f"✅ EarnApp berhasil dihentikan\n\nStatus: {status}"
-            else:
-                return f"⚠️ EarnApp mungkin masih berjalan\n\nStatus: {status or 'Unknown'}"
-        else:
-            return "✅ Command berhasil dijalankan"
-    
-    # Jika ada output, cek apakah sukses
-    result_lower = result.lower()
-    if "error" in result_lower or "failed" in result_lower or "❌" in result:
-        return f"❌ Error: {result[:200]}"
-    elif "starting" in result_lower or "started" in result_lower:
-        status = get_adb_app_status(device_name)
-        return f"✅ EarnApp berhasil dijalankan\n\nStatus: {status}"
-    else:
-        # Output terlalu verbose, ambil status saja
-        status = get_adb_app_status(device_name)
-        if action == "start":
-            return f"✅ EarnApp berhasil dijalankan\n\nStatus: {status}"
-        elif action == "stop":
-            return f"✅ EarnApp berhasil dihentikan\n\nStatus: {status}"
-        else:
-            return f"✅ Command berhasil\n\nStatus: {status}"
+    return format_adb_result_use_case(storage, action, result, device_name)
 
 def start_earnapp_device(device_name):
     """Start EarnApp di device tertentu (otomatis deteksi tipe)"""
-    if device_name not in devices:
-        return f"❌ Device '{device_name}' tidak ditemukan."
-    
-    dev = devices[device_name]
-    if dev.get("type") == "adb":
-        # ADB command: shell am start -n package/activity
-        cmd = f"am start -n {EARN_APP_ACTIVITY}"
-        result = run_cmd_device_by_name(device_name, cmd)
-        return format_adb_result("start", result, device_name)
-    else:
-        return run_cmd_device_by_name(device_name, "earnapp start")
+    return start_device_use_case(storage, device_name, log_activity=False).get("result", "")
 
 def stop_earnapp_device(device_name):
     """Stop EarnApp di device tertentu (otomatis deteksi tipe)"""
-    if device_name not in devices:
-        return f"❌ Device '{device_name}' tidak ditemukan."
-    
-    dev = devices[device_name]
-    if dev.get("type") == "adb":
-        # ADB command: shell am force-stop package
-        cmd = f"am force-stop {EARN_APP_PACKAGE}"
-        result = run_cmd_device_by_name(device_name, cmd)
-        return format_adb_result("stop", result, device_name)
-    else:
-        return run_cmd_device_by_name(device_name, "earnapp stop")
+    return stop_device_use_case(storage, device_name, log_activity=False).get("result", "")
 
 def check_device_health(device_name):
     """Cek kesehatan device"""
-    try:
-        dev = devices.get(device_name)
-        if not dev:
-            return False
-        
-        # Test koneksi dengan command sederhana
-        if dev.get("type") == "adb":
-            # Untuk ADB, test dengan command yang lebih sederhana
-            result = run_cmd_device_by_name(device_name, "getprop ro.build.version.release")
-        else:
-            # Untuk SSH/local, gunakan echo
-            result = run_cmd_device_by_name(device_name, "echo 'health_check'")
-        
-        # Cek apakah ada error atau hasil kosong
-        if result and "error" not in result.lower() and result.strip():
-            device_health[device_name] = {
-                "status": "online",
-                "last_check": int(time.time()),
-                "error": None
-            }
-            return True
-        else:
-            device_health[device_name] = {
-                "status": "offline",
-                "last_check": int(time.time()),
-                "error": "Command failed or no response"
-            }
-            return False
-    except Exception as e:
-        device_health[device_name] = {
-            "status": "offline",
-            "last_check": int(time.time()),
-            "error": str(e)
-        }
-        return False
+    health = get_device_health_use_case(storage, device_name)
+    is_healthy = health.get("healthy", False)
+    device_health[device_name] = {
+        "status": "online" if is_healthy else "offline",
+        "last_check": int(time.time()),
+        "error": health.get("error") if not is_healthy else None
+    }
+    return is_healthy
 
 def get_dashboard_data():
     """Kumpulkan data untuk dashboard"""
     dashboard_data = []
-    
-    for device_name in devices.keys():
-        dev = devices[device_name]
-        
-        # Cek kesehatan device
-        is_healthy = check_device_health(device_name)
+
+    statuses = get_all_device_statuses_use_case(storage).get("devices", [])
+    for device_status in statuses:
+        device_name = device_status.get("name")
+        is_healthy = device_status.get("health") == "online"
         status_icon = "🟢" if is_healthy else "🔴"
-        
-        # Dapatkan status EarnApp berdasarkan tipe device
-        if dev.get("type") == "adb":
-            # Untuk ADB, gunakan status yang lebih simple
-            earnapp_status = get_adb_app_status(device_name)
-            if earnapp_status and "Running" in earnapp_status:
-                earnapp_icon = "🟢"
-                status_text = "EarnApp: Running"
-            elif earnapp_status and "Stopped" in earnapp_status:
-                earnapp_icon = "🔴"
-                status_text = "EarnApp: Stopped"
-            elif earnapp_status and "Not installed" in earnapp_status:
-                earnapp_icon = "❌"
-                status_text = "EarnApp: Not installed"
-            else:
-                earnapp_icon = "⚠️"
-                status_text = f"EarnApp: {earnapp_status or 'Unknown'}"
-        else:
-            # Untuk SSH/local, gunakan helper function yang lebih reliable
-            try:
-                ssh_status = get_ssh_earnapp_status(device_name)
-                
-                if ssh_status:
-                    if "Running" in ssh_status:
-                        earnapp_icon = "🟢"
-                        status_text = "EarnApp: Running"
-                    elif "Stopped" in ssh_status:
-                        earnapp_icon = "🔴"
-                        status_text = "EarnApp: Stopped"
-                    elif "Not installed" in ssh_status:
-                        earnapp_icon = "❌"
-                        status_text = "EarnApp: Not installed"
-                    else:
-                        earnapp_icon = "⚠️"
-                        status_text = f"EarnApp: {ssh_status}"
-                else:
-                    # Fallback: parse langsung dari earnapp status command
-                    earnapp_status = run_cmd_device_by_name(device_name, "earnapp status")
-                    
-                    # Parse output untuk mencari status: disabled/enabled
-                    if earnapp_status:
-                        status_lower = earnapp_status.lower()
-                        if "status: disabled" in status_lower or "disabled" in status_lower:
-                            earnapp_icon = "🔴"
-                            status_text = "EarnApp: Stopped"
-                        elif "status: enabled" in status_lower or ("enabled" in status_lower and "disabled" not in status_lower):
-                            earnapp_icon = "🟢"
-                            status_text = "EarnApp: Running"
-                        elif "- Checking status." in earnapp_status or "checking" in status_lower:
-                            earnapp_icon = "🟡"
-                            status_text = "EarnApp: Checking..."
-                        elif "error" in status_lower or "❌" in earnapp_status:
-                            earnapp_icon = "❌"
-                            status_text = "EarnApp: Error"
-                        elif "running" in status_lower:
-                            earnapp_icon = "🟢"
-                            status_text = "EarnApp: Running"
-                        else:
-                            earnapp_icon = "🟡"
-                            status_text = "EarnApp: Unknown"
-                    else:
-                        earnapp_icon = "⚠️"
-                        status_text = "EarnApp: Status tidak tersedia"
-            except Exception as e:
-                earnapp_icon = "❌"
-                status_text = f"EarnApp: Error - {str(e)[:50]}"
-        
+        earnapp_icon = device_status.get("status_icon", "⚠️")
+        status_text = "EarnApp: {0}".format(device_status.get("earnapp_status", "Unknown"))
+        device_health[device_name] = {
+            "status": "online" if is_healthy else "offline",
+            "last_check": int(time.time()),
+            "error": None if is_healthy else "Command failed or no response"
+        }
         dashboard_data.append({
             "name": device_name,
             "health": status_icon,
@@ -515,29 +308,16 @@ def send_alert(chat_id, message):
 def log_activity(device_name, action, result, log_type="manual", user="admin"):
     """Log aktivitas ke activity log"""
     try:
-        log_entry = {
-            "timestamp": int(time.time()),
-            "device": device_name,
-            "action": action,  # start/stop/restart
-            "result": result[:500] if result else "",  # Limit result length
-            "type": log_type,  # manual/auto/scheduled
-            "user": user
-        }
-        
-        activity_logs.append(log_entry)
-        
-        # Keep only last MAX_LOG_ENTRIES
-        if len(activity_logs) > MAX_LOG_ENTRIES:
-            activity_logs[:] = activity_logs[-MAX_LOG_ENTRIES:]
-        
-        # Simpan ke file (async, jangan block)
-        try:
-            with open(ACTIVITY_LOG_FILE, "w") as f:
-                json.dump(activity_logs, f, indent=2)
-        except Exception as e:
-            print(f"Error saving activity log: {e}")
+        saved_logs = record_activity_use_case(storage, device_name, action, result, log_type, user)
+        if saved_logs is not None:
+            activity_logs[:] = saved_logs
     except Exception as e:
         print(f"Error logging activity: {e}")
+
+def notify_admin(message):
+    """Kirim notifikasi Markdown ke admin."""
+    if ADMIN_ID:
+        bot.send_message(ADMIN_ID, message, parse_mode="Markdown")
 
 def check_alerts():
     """Cek dan kirim alert jika diperlukan"""
@@ -589,6 +369,7 @@ def show_main_menu(chat_id):
     bot.send_message(chat_id, "Silakan pilih menu di bawah ini 👇", reply_markup=markup)
 
 def show_device_menu(chat_id):
+    refresh_devices()
     markup = types.ReplyKeyboardMarkup(row_width=2, resize_keyboard=True)
     for name in devices.keys():
         markup.add(types.KeyboardButton(name))
@@ -608,12 +389,14 @@ def start_cmd(msg):
     show_device_menu(msg.chat.id)
 
 # Pilih device
-@bot.message_handler(func=lambda m: m.text in devices)
+@bot.message_handler(func=is_known_device_message)
 def select_device(m):
     # Cek apakah user adalah admin
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
         
     # Jika sedang dalam flow remove device
     if m.chat.id in remove_device_state:
@@ -728,14 +511,14 @@ def add_device_process(msg):
             
             # Simpan device ADB
             data = state["data"]
+            refresh_devices()
             devices[data["name"]] = {
                 "type": "adb",
                 "host": data["host"],
                 "port": port
             }
             # simpan ke file JSON
-            with open(DEVICE_FILE, "w") as f:
-                json.dump(devices, f, indent=2)
+            storage.save_devices(devices)
             bot.send_message(chat_id, f"✅ Device ADB '{data['name']}' berhasil ditambahkan!\n\nIP: {data['host']}\nPort: {port}")
             add_device_state.pop(chat_id)
             show_main_menu(chat_id)
@@ -748,6 +531,7 @@ def add_device_process(msg):
         # Password SSH (hanya untuk SSH)
         state["data"]["password"] = msg.text
         data = state["data"]
+        refresh_devices()
         devices[data["name"]] = {
             "type": "ssh",
             "host": data["host"],
@@ -756,8 +540,7 @@ def add_device_process(msg):
             "password": data["password"]
         }
         # simpan ke file JSON
-        with open(DEVICE_FILE, "w") as f:
-            json.dump(devices, f, indent=2)
+        storage.save_devices(devices)
         bot.send_message(chat_id, f"✅ Device SSH '{data['name']}' berhasil ditambahkan!")
         add_device_state.pop(chat_id)
         show_main_menu(chat_id)
@@ -769,6 +552,8 @@ def handler_status(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
     
     device_name = user_device.get(m.chat.id, "—")
     if device_name not in devices:
@@ -797,6 +582,8 @@ def handler_start(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
         
     device_name = user_device.get(m.chat.id, "—")
     if device_name not in devices:
@@ -840,6 +627,8 @@ def handler_stop(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
         
     device_name = user_device.get(m.chat.id, "—")
     if device_name not in devices:
@@ -888,7 +677,11 @@ def handler_showid(m):
         bot.reply_to(m, "❌ Device belum dipilih.")
         return
 
-    out = run_cmd_device(m.chat.id, "earnapp showid")
+    payload, status_code = get_device_id_use_case(storage, dev_name)
+    if status_code == 200:
+        out = payload.get("result", "")
+    else:
+        out = payload.get("error", "Device tidak ditemukan")
     bot.reply_to(m, f"🆔 *Device ID ({dev_name}):*\n```\n{out}\n```", parse_mode="Markdown")
 
 @bot.message_handler(func=lambda m: m.text == "💣 Uninstall")
@@ -942,7 +735,9 @@ def handler_change_device(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
-        
+
+    refresh_devices()
+
     show_device_menu(m.chat.id)
 
 # Status All Devices
@@ -977,12 +772,16 @@ def handler_start_all(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
     
     bot.reply_to(m, "🚀 Memulai EarnApp di semua device...")
     
+    start_payload = start_all_devices_use_case(storage, log_activity=False)
     results = []
-    for device_name in devices.keys():
-        result = start_earnapp_device(device_name)
+    for item in _payload_results(start_payload):
+        device_name = item.get("device")
+        result = item.get("result", "")
         results.append(f"**{device_name}**: {result}")
         
         # Log activity
@@ -1028,12 +827,16 @@ def confirm_stop_all(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
     
     bot.answer_callback_query(call.id, "🛑 Menghentikan semua device...")
     
+    stop_payload = stop_all_devices_use_case(storage, log_activity=False)
     results = []
-    for device_name in devices.keys():
-        result = stop_earnapp_device(device_name)
+    for item in _payload_results(stop_payload):
+        device_name = item.get("device")
+        result = item.get("result", "")
         results.append(f"**{device_name}**: {result}")
         
         # Log activity
@@ -1071,6 +874,7 @@ def confirm_remove_device(call):
         return
 
     device_name = call.data.split(":", 1)[1]
+    refresh_devices()
     if device_name not in devices:
         bot.answer_callback_query(call.id, f"❌ Device '{device_name}' tidak ditemukan.")
         try:
@@ -1083,8 +887,7 @@ def confirm_remove_device(call):
     # Hapus device dari konfigurasi
     try:
         del devices[device_name]
-        with open(DEVICE_FILE, "w") as f:
-            json.dump(devices, f, indent=2)
+        storage.save_devices(devices)
         try:
             os.chmod(DEVICE_FILE, 0o600)
         except Exception:
@@ -1120,6 +923,8 @@ def handler_health_check(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
     
     bot.reply_to(m, "🔍 Melakukan health check semua device...")
     
@@ -1144,6 +949,8 @@ def handler_remove_device(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
 
     chat_id = m.chat.id
     remove_device_state[chat_id] = True
@@ -1181,6 +988,8 @@ def quick_restart(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
     
     bot.answer_callback_query(call.id, "🔄 Quick Restart...")
     
@@ -1215,6 +1024,10 @@ def quick_restart_device(call):
         return
     
     device_name = call.data.split(":", 1)[1]
+    refresh_devices()
+    if device_name not in devices:
+        bot.answer_callback_query(call.id, "❌ Device tidak ditemukan")
+        return
     bot.answer_callback_query(call.id, f"🔄 Restarting {device_name}...")
     
     bot.edit_message_text(
@@ -1225,9 +1038,9 @@ def quick_restart_device(call):
     )
     
     # Jalankan stop → wait → start
-    stop_result = stop_earnapp_device(device_name)
+    stop_result = _text_result(stop_earnapp_device(device_name))
     time.sleep(5)
-    start_result = start_earnapp_device(device_name)
+    start_result = _text_result(start_earnapp_device(device_name))
     
     # Log activity
     log_activity(device_name, "restart", f"Stop: {stop_result[:200]}\nStart: {start_result[:200]}", "manual", str(call.from_user.id))
@@ -1262,6 +1075,8 @@ def quick_restart_all(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
     
     bot.answer_callback_query(call.id, "🔄 Restarting all devices...")
     
@@ -1274,9 +1089,9 @@ def quick_restart_all(call):
     
     results = []
     for device_name in devices.keys():
-        stop_result = stop_earnapp_device(device_name)
+        stop_result = _text_result(stop_earnapp_device(device_name))
         time.sleep(5)
-        start_result = start_earnapp_device(device_name)
+        start_result = _text_result(start_earnapp_device(device_name))
         results.append(f"**{device_name}**\nStop: {stop_result[:50]}...\nStart: {start_result[:50]}...")
     
     message = "✅ *QUICK RESTART ALL SELESAI*\n\n" + "\n\n".join(results)
@@ -1302,6 +1117,8 @@ def quick_status(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
     
     bot.answer_callback_query(call.id, "📊 Checking status...")
     
@@ -1328,6 +1145,9 @@ def enable_auto_restart_all(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "✅ Enabling auto restart all...")
     
@@ -1347,8 +1167,7 @@ def enable_auto_restart_all(call):
             enabled_count += 1
     
     # Simpan ke file
-    with open(AUTO_RESTART_FILE, "w") as f:
-        json.dump(auto_restart_settings, f, indent=2)
+    storage.save_auto_restart(auto_restart_settings)
     
     bot.edit_message_text(
         f"✅ *ENABLE AUTO RESTART ALL*\n\nBerhasil mengaktifkan auto restart untuk {enabled_count} device.",
@@ -1363,6 +1182,9 @@ def disable_auto_restart_all(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "❌ Disabling auto restart all...")
     
@@ -1373,8 +1195,7 @@ def disable_auto_restart_all(call):
             disabled_count += 1
     
     # Simpan ke file
-    with open(AUTO_RESTART_FILE, "w") as f:
-        json.dump(auto_restart_settings, f, indent=2)
+    storage.save_auto_restart(auto_restart_settings)
     
     bot.edit_message_text(
         f"❌ *DISABLE AUTO RESTART ALL*\n\nBerhasil menonaktifkan auto restart untuk {disabled_count} device.",
@@ -1425,6 +1246,9 @@ def handler_schedule(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
+    refresh_auto_restart_settings()
     
     # Tampilkan menu schedule
     markup = types.InlineKeyboardMarkup()
@@ -1519,6 +1343,8 @@ def auto_restart_menu(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "🔄 Menu Auto Restart")
     
@@ -1547,6 +1373,9 @@ def back_to_schedule(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "🔙 Kembali")
     
@@ -1576,6 +1405,8 @@ def time_schedule_menu(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
     
     bot.answer_callback_query(call.id, "🕐 Time Schedule Menu")
     
@@ -1603,6 +1434,9 @@ def add_time_schedule(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
+    refresh_schedules()
     
     bot.answer_callback_query(call.id, "➕ Add Time Schedule")
     
@@ -1640,6 +1474,10 @@ def time_schedule_device(call):
     
     device_name = call.data.split(":", 1)[1]
     chat_id = call.message.chat.id
+    refresh_devices()
+    if device_name not in devices:
+        bot.answer_callback_query(call.id, "❌ Device tidak ditemukan")
+        return
     
     if chat_id not in schedule_state:
         schedule_state[chat_id] = {"step": 1, "data": {}}
@@ -1772,11 +1610,11 @@ def time_schedule_days(call):
     
     # Generate task_id
     task_id = f"{schedule_state[chat_id]['data']['device']}_{schedule_state[chat_id]['data']['time']}_{schedule_state[chat_id]['data']['action']}"
+    refresh_schedules()
     scheduled_tasks[task_id] = schedule_state[chat_id]["data"].copy()
     
     # Simpan ke file
-    with open(SCHEDULE_FILE, "w") as f:
-        json.dump(scheduled_tasks, f, indent=2)
+    storage.save_schedules(scheduled_tasks)
     
     # Hapus state
     schedule_state.pop(chat_id, None)
@@ -1817,11 +1655,11 @@ def process_time_schedule_days_manual(m):
         
         # Generate task_id
         task_id = f"{schedule_state[m.chat.id]['data']['device']}_{schedule_state[m.chat.id]['data']['time']}_{schedule_state[m.chat.id]['data']['action']}"
+        refresh_schedules()
         scheduled_tasks[task_id] = schedule_state[m.chat.id]["data"].copy()
         
         # Simpan ke file
-        with open(SCHEDULE_FILE, "w") as f:
-            json.dump(scheduled_tasks, f, indent=2)
+        storage.save_schedules(scheduled_tasks)
         
         # Hapus state
         schedule_state.pop(m.chat.id, None)
@@ -1845,6 +1683,8 @@ def list_time_schedule(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
     
     bot.answer_callback_query(call.id, "📋 List Time Schedule")
     
@@ -1875,6 +1715,8 @@ def delete_time_schedule(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
     
     bot.answer_callback_query(call.id, "🗑️ Delete Time Schedule")
     
@@ -1908,13 +1750,13 @@ def delete_schedule_task(call):
         return
     
     task_id = call.data.split(":", 1)[1]
+    refresh_schedules()
     
     if task_id in scheduled_tasks:
         del scheduled_tasks[task_id]
         
         # Simpan ke file
-        with open(SCHEDULE_FILE, "w") as f:
-            json.dump(scheduled_tasks, f, indent=2)
+        storage.save_schedules(scheduled_tasks)
         
         bot.answer_callback_query(call.id, "✅ Schedule dihapus")
         bot.edit_message_text(
@@ -1937,6 +1779,9 @@ def set_auto_restart(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_devices()
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "📝 Set Auto Restart")
     
@@ -1972,6 +1817,10 @@ def select_device_restart(call):
     
     device_name = call.data.split(":", 1)[1]
     chat_id = call.message.chat.id
+    refresh_devices()
+    if device_name not in devices:
+        bot.answer_callback_query(call.id, "❌ Device tidak ditemukan")
+        return
     
     # Mulai flow input interval
     auto_restart_state[chat_id] = {"step": 1, "data": {"device": device_name}}
@@ -2003,6 +1852,7 @@ def process_auto_restart_interval(m):
         
         state = auto_restart_state[m.chat.id]
         device_name = state["data"]["device"]
+        refresh_auto_restart_settings()
         
         # Simpan konfigurasi
         # Setiap interval akan selalu: stop → tunggu 5 detik → start
@@ -2014,8 +1864,7 @@ def process_auto_restart_interval(m):
         }
         
         # Simpan ke file
-        with open(AUTO_RESTART_FILE, "w") as f:
-            json.dump(auto_restart_settings, f, indent=2)
+        storage.save_auto_restart(auto_restart_settings)
         
         # Hapus state
         auto_restart_state.pop(m.chat.id, None)
@@ -2040,6 +1889,8 @@ def list_auto_restart(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "📋 List Auto Restart")
     
@@ -2080,6 +1931,8 @@ def disable_auto_restart(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "❌ Disable Auto Restart")
     
@@ -2115,13 +1968,13 @@ def disable_device_restart(call):
         return
     
     device_name = call.data.split(":", 1)[1]
+    refresh_auto_restart_settings()
     
     if device_name in auto_restart_settings:
         auto_restart_settings[device_name]["enabled"] = False
         
         # Simpan ke file
-        with open(AUTO_RESTART_FILE, "w") as f:
-            json.dump(auto_restart_settings, f, indent=2)
+        storage.save_auto_restart(auto_restart_settings)
         
         bot.answer_callback_query(call.id, f"✅ {device_name} dinonaktifkan")
         bot.edit_message_text(
@@ -2144,6 +1997,9 @@ def list_schedule(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_schedules()
+    refresh_auto_restart_settings()
     
     bot.answer_callback_query(call.id, "📋 List Schedule")
     
@@ -2207,217 +2063,6 @@ def schedule_settings(call):
     
     bot.edit_message_text(message, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
 
-# Background monitoring task
-def background_monitor():
-    """Background task untuk monitoring dan alert"""
-    while True:
-        try:
-            # Cek alert
-            check_alerts()
-            
-            # Sleep sesuai interval
-            time.sleep(alert_settings["check_interval"])
-        except Exception as e:
-            print(f"Error in background monitor: {e}")
-            time.sleep(60)  # Sleep 1 menit jika error
-
-# Background auto restart task
-def background_auto_restart():
-    """Background task untuk auto restart EarnApp setiap beberapa jam"""
-    while True:
-        try:
-            current_time = int(time.time())
-            
-            for device_name, settings in auto_restart_settings.items():
-                if not settings.get("enabled", False):
-                    continue
-                
-                interval_hours = settings.get("interval_hours", 0)
-                if interval_hours <= 0:
-                    continue
-                
-                last_run = settings.get("last_run", 0)
-                interval_seconds = int(interval_hours * 3600)
-                delay_seconds = settings.get("delay_seconds", 5)  # Default 5 detik delay antara stop dan start
-                
-                # Cek apakah sudah waktunya untuk menjalankan
-                if current_time - last_run >= interval_seconds:
-                    # Selalu jalankan: stop → tunggu → start
-                    print(f"Auto restart: {device_name} - Executing stop → wait {delay_seconds}s → start")
-                    
-                    # 1. Jalankan stop (tidak peduli status saat ini)
-                    stop_result = stop_earnapp_device(device_name)
-                    print(f"Auto restart: {device_name} - Stop executed")
-                    
-                    # 2. Tunggu beberapa detik
-                    time.sleep(delay_seconds)
-                    
-                    # 3. Jalankan start
-                    start_result = start_earnapp_device(device_name)
-                    print(f"Auto restart: {device_name} - Start executed")
-                    
-                    # Log activity
-                    log_activity(device_name, "restart", f"Stop: {stop_result[:200]}\nStart: {start_result[:200]}", "auto", "system")
-                    
-                    # Update settings
-                    auto_restart_settings[device_name]["last_run"] = current_time
-                    
-                    # Simpan ke file
-                    try:
-                        with open(AUTO_RESTART_FILE, "w") as f:
-                            json.dump(auto_restart_settings, f, indent=2)
-                    except Exception as e:
-                        print(f"Error saving auto_restart.json: {e}")
-                    
-                    # Kirim notifikasi ke admin
-                    if ADMIN_ID:
-                        try:
-                            bot.send_message(
-                                ADMIN_ID,
-                                f"🔄 *AUTO RESTART*\n\n"
-                                f"Device: **{device_name}**\n"
-                                f"Interval: {interval_hours} jam\n"
-                                f"Delay: {delay_seconds} detik\n\n"
-                                f"**Stop Result:**\n```\n{stop_result}\n```\n\n"
-                                f"**Start Result:**\n```\n{start_result}\n```",
-                                parse_mode="Markdown"
-                            )
-                        except Exception as e:
-                            print(f"Error sending auto restart notification: {e}")
-                    
-                    print(f"Auto restart: {device_name} - Completed (stop → wait → start)")
-            
-            # Sleep 1 menit sebelum cek lagi
-            time.sleep(60)
-        except Exception as e:
-            print(f"Error in background auto restart: {e}")
-            time.sleep(60)  # Sleep 1 menit jika error
-
-# Background time-based schedule task
-def background_time_schedule():
-    """Background task untuk menjalankan time-based schedule"""
-    # Track last execution untuk setiap task
-    last_executions = {}  # task_id -> timestamp
-    
-    while True:
-        try:
-            from datetime import datetime
-            
-            current_time = datetime.now()
-            current_hour = current_time.hour
-            current_minute = current_time.minute
-            current_weekday = current_time.weekday()  # 0=Monday, 6=Sunday
-            
-            for task_id, task in scheduled_tasks.items():
-                if not task.get("enabled", True):
-                    continue
-                
-                # Parse waktu dari task
-                time_str = task.get("time", "")
-                if not time_str:
-                    continue
-                
-                try:
-                    task_hour, task_minute = map(int, time_str.split(":"))
-                except (ValueError, IndexError):
-                    continue
-                
-                # Cek apakah hari sesuai
-                task_days = task.get("days", [])
-                if current_weekday not in task_days:
-                    continue
-                
-                # Cek apakah waktu sudah sesuai (dalam 1 menit toleransi)
-                if current_hour == task_hour and current_minute == task_minute:
-                    # Cek apakah sudah dijalankan dalam 1 menit terakhir (hindari duplikasi)
-                    last_exec = last_executions.get(task_id, 0)
-                    if int(time.time()) - last_exec < 60:
-                        continue
-                    
-                    # Jalankan action
-                    device_name = task.get("device")
-                    action = task.get("action", "restart")
-                    
-                    print(f"Time schedule: {task_id} - Executing {action} on {device_name}")
-                    
-                    if action == "restart":
-                        # Restart: stop → wait 5s → start
-                        stop_result = stop_earnapp_device(device_name)
-                        time.sleep(5)
-                        start_result = start_earnapp_device(device_name)
-                        
-                        # Log activity
-                        log_activity(device_name, "restart", f"Stop: {stop_result[:200]}\nStart: {start_result[:200]}", "scheduled", "system")
-                        
-                        # Kirim notifikasi
-                        if ADMIN_ID:
-                            try:
-                                bot.send_message(
-                                    ADMIN_ID,
-                                    f"🔄 *TIME SCHEDULE*\n\n"
-                                    f"Task: **{task_id}**\n"
-                                    f"Device: **{device_name}**\n"
-                                    f"Action: RESTART\n"
-                                    f"Waktu: {time_str}\n\n"
-                                    f"**Stop Result:**\n```\n{stop_result}\n```\n\n"
-                                    f"**Start Result:**\n```\n{start_result}\n```",
-                                    parse_mode="Markdown"
-                                )
-                            except Exception as e:
-                                print(f"Error sending time schedule notification: {e}")
-                    
-                    elif action == "start":
-                        result = start_earnapp_device(device_name)
-                        
-                        # Log activity
-                        log_activity(device_name, "start", result, "scheduled", "system")
-                        
-                        if ADMIN_ID:
-                            try:
-                                bot.send_message(
-                                    ADMIN_ID,
-                                    f"🟢 *TIME SCHEDULE*\n\n"
-                                    f"Task: **{task_id}**\n"
-                                    f"Device: **{device_name}**\n"
-                                    f"Action: START\n"
-                                    f"Waktu: {time_str}\n\n"
-                                    f"**Result:**\n```\n{result}\n```",
-                                    parse_mode="Markdown"
-                                )
-                            except Exception as e:
-                                print(f"Error sending time schedule notification: {e}")
-                    
-                    elif action == "stop":
-                        result = stop_earnapp_device(device_name)
-                        
-                        # Log activity
-                        log_activity(device_name, "stop", result, "scheduled", "system")
-                        
-                        if ADMIN_ID:
-                            try:
-                                bot.send_message(
-                                    ADMIN_ID,
-                                    f"🔴 *TIME SCHEDULE*\n\n"
-                                    f"Task: **{task_id}**\n"
-                                    f"Device: **{device_name}**\n"
-                                    f"Action: STOP\n"
-                                    f"Waktu: {time_str}\n\n"
-                                    f"**Result:**\n```\n{result}\n```",
-                                    parse_mode="Markdown"
-                                )
-                            except Exception as e:
-                                print(f"Error sending time schedule notification: {e}")
-                    
-                    # Update last execution
-                    last_executions[task_id] = int(time.time())
-                    print(f"Time schedule: {task_id} - Completed")
-            
-            # Sleep 30 detik sebelum cek lagi (lebih sering untuk akurasi waktu)
-            time.sleep(30)
-        except Exception as e:
-            print(f"Error in background time schedule: {e}")
-            time.sleep(60)  # Sleep 1 menit jika error
-
 # Activity Log & History
 @bot.message_handler(func=lambda m: m.text == "📝 Activity Log")
 def handler_activity_log(m):
@@ -2425,6 +2070,8 @@ def handler_activity_log(m):
     if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         return
+
+    refresh_activity_logs()
     
     # Tampilkan menu activity log
     markup = types.InlineKeyboardMarkup()
@@ -2450,6 +2097,8 @@ def view_activity_log(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_activity_logs()
     
     bot.answer_callback_query(call.id, "📋 Loading history...")
     
@@ -2487,6 +2136,9 @@ def filter_log_device(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_devices()
+    refresh_activity_logs()
     
     bot.answer_callback_query(call.id, "🔍 Filter by Device")
     
@@ -2521,6 +2173,7 @@ def view_log_device(call):
         return
     
     device_name = call.data.split(":", 1)[1]
+    refresh_activity_logs()
     bot.answer_callback_query(call.id, f"Loading {device_name} logs...")
     
     # Filter logs by device
@@ -2577,9 +2230,13 @@ def process_filter_date(m):
         bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
         filter_date_state.pop(m.chat.id, None)
         return
+
+    refresh_activity_logs()
     
     date_input = m.text.strip().lower()
     from datetime import datetime, timedelta
+    days_ago = None
+    target_date = None
     
     try:
         if date_input == "today":
@@ -2588,12 +2245,10 @@ def process_filter_date(m):
             target_date = (datetime.now() - timedelta(days=1)).date()
         elif date_input == "week":
             # Filter untuk 7 hari terakhir
-            target_date = None
             days_ago = 7
         else:
             # Parse tanggal
             target_date = datetime.strptime(date_input, "%Y-%m-%d").date()
-            days_ago = None
         
         # Filter logs
         if days_ago:
@@ -2603,6 +2258,8 @@ def process_filter_date(m):
             date_str = f"{days_ago} hari terakhir"
         else:
             # Filter untuk tanggal tertentu
+            if target_date is None:
+                raise ValueError("Tanggal tidak valid")
             start_time = int(datetime.combine(target_date, datetime.min.time()).timestamp())
             end_time = int(datetime.combine(target_date, datetime.max.time()).timestamp())
             filtered_logs = [log for log in activity_logs if start_time <= log["timestamp"] <= end_time]
@@ -2644,6 +2301,8 @@ def export_log(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_activity_logs()
     
     bot.answer_callback_query(call.id, "💾 Exporting log...")
     
@@ -2706,6 +2365,8 @@ def clear_log(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_activity_logs()
     
     # Konfirmasi clear
     markup = types.InlineKeyboardMarkup()
@@ -2729,13 +2390,12 @@ def confirm_clear_log(call):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
     
-    global activity_logs
+    refresh_activity_logs()
     count = len(activity_logs)
-    activity_logs.clear()
+    activity_logs[:] = []
     
     # Simpan ke file
-    with open(ACTIVITY_LOG_FILE, "w") as f:
-        json.dump(activity_logs, f, indent=2)
+    storage.save_activity_log(activity_logs)
     
     bot.answer_callback_query(call.id, "✅ Log dihapus")
     bot.edit_message_text(
@@ -2751,6 +2411,8 @@ def back_to_activity_log(call):
     if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
         bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
         return
+
+    refresh_activity_logs()
     
     bot.answer_callback_query(call.id, "🔙 Kembali")
     
@@ -2810,22 +2472,11 @@ def confirm_restart(call):
         parse_mode="Markdown"
     )
     
-    # Simpan semua state ke file
+    # Muat ulang state terbaru agar restart tidak menimpa perubahan Web UI.
     try:
-        # Simpan devices.json
-        with open(DEVICE_FILE, "w") as f:
-            json.dump(devices, f, indent=2)
-        # Simpan auto_restart.json
-        with open(AUTO_RESTART_FILE, "w") as f:
-            json.dump(auto_restart_settings, f, indent=2)
-        # Simpan schedules.json
-        with open(SCHEDULE_FILE, "w") as f:
-            json.dump(scheduled_tasks, f, indent=2)
-        # Simpan activity_log.json
-        with open(ACTIVITY_LOG_FILE, "w") as f:
-            json.dump(activity_logs, f, indent=2)
+        refresh_runtime_state()
     except Exception as e:
-        print(f"Error saving state: {e}")
+        print(f"Error refreshing state: {e}")
     
     # Stop polling dan batalkan semua tasks
     try:
@@ -2835,7 +2486,6 @@ def confirm_restart(call):
     
     # Restart process
     try:
-        import sys
         import os
         python = sys.executable
         os.execl(python, python, *sys.argv)
@@ -2870,21 +2520,8 @@ def fallback(m):
 def cleanup():
     """Cleanup sebelum shutdown/restart"""
     try:
-        # Simpan state
-        with open(DEVICE_FILE, "w") as f:
-            json.dump(devices, f, indent=2)
-        
-        # Simpan auto restart settings
-        with open(AUTO_RESTART_FILE, "w") as f:
-            json.dump(auto_restart_settings, f, indent=2)
-        
-        # Simpan scheduled tasks
-        with open(SCHEDULE_FILE, "w") as f:
-            json.dump(scheduled_tasks, f, indent=2)
-        
-        # Simpan activity logs
-        with open(ACTIVITY_LOG_FILE, "w") as f:
-            json.dump(activity_logs, f, indent=2)
+        # Muat ulang state terbaru agar cleanup tidak menimpa perubahan Web UI.
+        refresh_runtime_state()
         
         # Hapus state sementara
         add_device_state.clear()
@@ -2907,21 +2544,17 @@ def cleanup():
 # -----------------------
 if __name__ == "__main__":
     print("🤖 Bot EarnApp multi-device aktif dan mendengarkan perintah Telegram...")
-    
-    # Start background monitoring
-    monitor_thread = threading.Thread(target=background_monitor, daemon=True)
-    monitor_thread.start()
-    print("🔍 Background monitoring started...")
-    
-    # Start background auto restart
-    auto_restart_thread = threading.Thread(target=background_auto_restart, daemon=True)
-    auto_restart_thread.start()
-    print("🔄 Background auto restart started...")
-    
-    # Start background time-based schedule
-    time_schedule_thread = threading.Thread(target=background_time_schedule, daemon=True)
-    time_schedule_thread.start()
-    print("🕐 Background time-based schedule started...")
+    start_workers(
+        storage,
+        notify_admin,
+        alert_settings,
+        device_health,
+        auto_restart_settings,
+        scheduled_tasks,
+        start_device_fn=start_earnapp_device,
+        stop_device_fn=stop_earnapp_device,
+        record_activity_fn=log_activity,
+    )
     
     # Kirim notifikasi bahwa bot sudah siap (setelah delay untuk memastikan bot sudah ready)
     def send_ready_notification():
@@ -2931,14 +2564,12 @@ if __name__ == "__main__":
             try:
                 from datetime import datetime
                 current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                bot.send_message(
-                    ADMIN_ID,
+                notify_admin(
                     f"✅ *BOT READY*\n\n"
                     f"Bot EarnApp telah siap digunakan!\n\n"
                     f"📅 Waktu: {current_time}\n"
                     f"🔄 Status: Online\n\n"
-                    f"Semua fitur sudah aktif dan siap digunakan.",
-                    parse_mode="Markdown"
+                    f"Semua fitur sudah aktif dan siap digunakan."
                 )
             except Exception as e:
                 print(f"Error sending ready notification: {e}")
