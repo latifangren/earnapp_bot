@@ -1,5 +1,64 @@
 // API Base URL
 const API_BASE = '/api';
+const CSRF_TOKEN = document.querySelector('meta[name="csrf-token"]')?.content || '';
+
+function encodeApiPathSegment(value) {
+    return encodeURIComponent(String(value ?? ''));
+}
+
+function buildApiUrl(pathSegments = [], queryParams = null) {
+    const encodedPath = pathSegments.length > 0
+        ? `/${pathSegments.map(encodeApiPathSegment).join('/')}`
+        : '';
+    const searchParams = new URLSearchParams();
+
+    if (queryParams) {
+        Object.entries(queryParams).forEach(([key, value]) => {
+            if (value === undefined || value === null || value === '') {
+                return;
+            }
+            searchParams.append(key, String(value));
+        });
+    }
+
+    const queryString = searchParams.toString();
+    return `${API_BASE}${encodedPath}${queryString ? `?${queryString}` : ''}`;
+}
+
+function withCsrfHeaders(headers = {}) {
+    return {
+        ...headers,
+        'X-CSRF-Token': CSRF_TOKEN
+    };
+}
+
+function escapeHtml(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function escapeInlineHandlerArg(value) {
+    return escapeHtml(String(value ?? ''))
+        .replace(/\\/g, '\\\\')
+        .replace(/&#39;/g, "\\'")
+        .replace(/\r/g, '\\r')
+        .replace(/\n/g, '\\n')
+        .replace(/\u2028/g, '\\u2028')
+        .replace(/\u2029/g, '\\u2029');
+}
+
+function safeDomId(value) {
+    return encodeURIComponent(String(value ?? ''));
+}
+
+function sanitizeClassToken(value, fallback = 'unknown') {
+    const token = String(value ?? '').trim();
+    return /^[a-zA-Z0-9_-]+$/.test(token) ? token : fallback;
+}
 
 // Global state
 let devicesData = {};
@@ -67,42 +126,48 @@ function updateDeviceSelects() {
 function createDeviceCard(name, device) {
     const col = document.createElement('div');
     col.className = 'col-md-6 col-lg-4 col-xl-3';
+    const escapedName = escapeHtml(name);
+    const escapedType = escapeHtml(device?.type);
+    const handlerName = escapeInlineHandlerArg(name);
+    const cardId = `device-${safeDomId(name)}`;
+    const healthId = `health-${safeDomId(name)}`;
+    const statusId = `status-${safeDomId(name)}`;
     
     col.innerHTML = `
-        <div class="card device-card device-card-compact" id="device-${name}">
+        <div class="card device-card device-card-compact" id="${cardId}">
             <div class="card-header">
-                <span><i class="bi bi-device-hdd"></i> ${name}</span>
-                <span class="badge bg-light text-dark">${device.type}</span>
+                <span><i class="bi bi-device-hdd"></i> ${escapedName}</span>
+                <span class="badge bg-light text-dark">${escapedType}</span>
             </div>
             <div class="card-body">
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <small class="text-muted">Health:</small>
-                    <span id="health-${name}" class="health-online">
+                    <span id="${healthId}" class="health-online">
                         <i class="bi bi-circle-fill"></i> <small>Checking...</small>
                     </span>
                 </div>
                 <div class="d-flex justify-content-between align-items-center mb-3">
                     <small class="text-muted">EarnApp:</small>
-                    <span id="status-${name}" class="status-badge status-unknown">
+                    <span id="${statusId}" class="status-badge status-unknown">
                         <small>Checking...</small>
                     </span>
                 </div>
                 <div class="btn-group w-100 mb-2" role="group">
-                    <button class="btn btn-success btn-sm btn-action" onclick="startDevice('${name}')" title="Start">
+                    <button class="btn btn-success btn-sm btn-action" onclick="startDevice('${handlerName}')" title="Start">
                         <i class="bi bi-play"></i>
                     </button>
-                    <button class="btn btn-danger btn-sm btn-action" onclick="stopDevice('${name}')" title="Stop">
+                    <button class="btn btn-danger btn-sm btn-action" onclick="stopDevice('${handlerName}')" title="Stop">
                         <i class="bi bi-stop"></i>
                     </button>
-                    <button class="btn btn-warning btn-sm btn-action" onclick="restartDevice('${name}')" title="Restart">
+                    <button class="btn btn-warning btn-sm btn-action" onclick="restartDevice('${handlerName}')" title="Restart">
                         <i class="bi bi-arrow-repeat"></i>
                     </button>
                 </div>
                 <div class="d-grid gap-1">
-                    <button class="btn btn-info btn-sm" onclick="showDeviceId('${name}')" title="Show Device ID">
+                    <button class="btn btn-info btn-sm" onclick="showDeviceId('${handlerName}')" title="Show Device ID">
                         <i class="bi bi-info-circle"></i> ID
                     </button>
-                    <button class="btn btn-outline-danger btn-sm" onclick="deleteDevice('${name}')" title="Delete Device">
+                    <button class="btn btn-outline-danger btn-sm" onclick="deleteDevice('${handlerName}')" title="Delete Device">
                         <i class="bi bi-trash"></i> Delete
                     </button>
                 </div>
@@ -143,8 +208,8 @@ async function refreshAll() {
 
 // Update device status display
 function updateDeviceStatus(name, status) {
-    const healthEl = document.getElementById(`health-${name}`);
-    const statusEl = document.getElementById(`status-${name}`);
+    const healthEl = document.getElementById(`health-${safeDomId(name)}`);
+    const statusEl = document.getElementById(`status-${safeDomId(name)}`);
     
     if (healthEl) {
         if (status.health === 'online') {
@@ -172,12 +237,13 @@ function updateDeviceStatus(name, status) {
 
 // Start device
 async function startDevice(name) {
-    const card = document.getElementById(`device-${name}`);
+    const card = document.getElementById(`device-${safeDomId(name)}`);
     if (card) card.classList.add('loading');
     
     try {
-        const response = await fetch(`${API_BASE}/devices/${name}/start`, {
-            method: 'POST'
+        const response = await fetch(buildApiUrl(['devices', name, 'start']), {
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -199,12 +265,13 @@ async function startDevice(name) {
 async function stopDevice(name) {
     if (!confirm(`Stop ${name}?`)) return;
     
-    const card = document.getElementById(`device-${name}`);
+    const card = document.getElementById(`device-${safeDomId(name)}`);
     if (card) card.classList.add('loading');
     
     try {
-        const response = await fetch(`${API_BASE}/devices/${name}/stop`, {
-            method: 'POST'
+        const response = await fetch(buildApiUrl(['devices', name, 'stop']), {
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -224,12 +291,13 @@ async function stopDevice(name) {
 
 // Restart device
 async function restartDevice(name) {
-    const card = document.getElementById(`device-${name}`);
+    const card = document.getElementById(`device-${safeDomId(name)}`);
     if (card) card.classList.add('loading');
     
     try {
-        const response = await fetch(`${API_BASE}/devices/${name}/restart`, {
-            method: 'POST'
+        const response = await fetch(buildApiUrl(['devices', name, 'restart']), {
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -252,21 +320,18 @@ async function quickRestartAll() {
     if (!confirm('Quick restart all devices? (Stop → Wait 5s → Start)')) return;
     
     try {
-        // Stop all first
-        await fetch(`${API_BASE}/devices/all/stop`, { method: 'POST' });
-        showToast('Stopping all devices...', 'info');
-        
-        // Wait 5 seconds
-        await new Promise(resolve => setTimeout(resolve, 5000));
-        
-        // Start all
-        const response = await fetch(`${API_BASE}/devices/all/start`, { method: 'POST' });
+        const response = await fetch(buildApiUrl(['devices', 'all', 'restart']), {
+            method: 'POST',
+            headers: withCsrfHeaders()
+        });
         const data = await response.json();
         
         if (data.success) {
             showToast('All devices restarted', 'success');
             await refreshAll();
             await loadActivityLogs();
+        } else {
+            showToast(`Error: ${data.message || 'Unknown error'}`, 'error');
         }
     } catch (error) {
         showToast('Error: ' + error.message, 'error');
@@ -277,7 +342,8 @@ async function quickRestartAll() {
 async function healthCheckAll() {
     try {
         const response = await fetch(`${API_BASE}/devices/all/health-check`, {
-            method: 'POST'
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -296,7 +362,8 @@ async function startAllDevices() {
     
     try {
         const response = await fetch(`${API_BASE}/devices/all/start`, {
-            method: 'POST'
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -316,7 +383,8 @@ async function stopAllDevices() {
     
     try {
         const response = await fetch(`${API_BASE}/devices/all/stop`, {
-            method: 'POST'
+            method: 'POST',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -333,7 +401,7 @@ async function stopAllDevices() {
 // Show device ID
 async function showDeviceId(name) {
     try {
-        const response = await fetch(`${API_BASE}/devices/${name}/id`);
+        const response = await fetch(buildApiUrl(['devices', name, 'id']));
         const data = await response.json();
         
         if (data.success) {
@@ -351,8 +419,9 @@ async function deleteDevice(name) {
     if (!confirm(`Delete device "${name}"?`)) return;
     
     try {
-        const response = await fetch(`${API_BASE}/devices/${name}`, {
-            method: 'DELETE'
+        const response = await fetch(buildApiUrl(['devices', name]), {
+            method: 'DELETE',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -384,21 +453,31 @@ function toggleDeviceTypeFields() {
 // Submit add device form
 async function submitAddDevice() {
     const form = document.getElementById('add-device-form');
-    const formData = new FormData(form);
-    const data = {};
-    
-    formData.forEach((value, key) => {
-        data[key] = value;
-    });
-    
-    if (data.port) {
-        data.port = parseInt(data.port);
+    const type = form.querySelector('[name="type"]').value;
+    const data = {
+        name: form.querySelector('[name="name"]').value,
+        type: type
+    };
+
+    if (type === 'ssh') {
+        const sshFields = document.getElementById('ssh-fields');
+        data.host = sshFields.querySelector('[name="host"]').value;
+        data.port = parseInt(sshFields.querySelector('[name="port"]').value, 10);
+        data.user = sshFields.querySelector('[name="user"]').value;
+        data.password = sshFields.querySelector('[name="password"]').value;
+    } else if (type === 'adb') {
+        const adbFields = document.getElementById('adb-fields');
+        data.host = adbFields.querySelector('[name="host"]').value;
+        data.port = parseInt(adbFields.querySelector('[name="port"]').value, 10);
+    } else if (type === 'local') {
+        const localFields = document.getElementById('local-fields');
+        data.path = localFields.querySelector('[name="path"]').value;
     }
     
     try {
         const response = await fetch(`${API_BASE}/devices`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify(data)
         });
         
@@ -424,10 +503,10 @@ async function loadActivityLogs() {
         const typeFilter = document.getElementById('log-type-filter').value;
         const dateFilter = document.getElementById('log-date-filter').value;
         
-        let url = `${API_BASE}/activity-logs?limit=100`;
-        if (deviceFilter) url += `&device=${deviceFilter}`;
-        
-        const response = await fetch(url);
+        const response = await fetch(buildApiUrl(['activity-logs'], {
+            limit: 100,
+            device: deviceFilter
+        }));
         const data = await response.json();
         let logs = data.logs || [];
         
@@ -459,18 +538,25 @@ async function loadActivityLogs() {
             
             const actionClass = log.action === 'start' ? 'start' : 
                                log.action === 'stop' ? 'stop' : 'restart';
-            const typeClass = log.type || 'manual';
+            const typeClass = sanitizeClassToken(log.type, 'manual');
+            const formattedTime = escapeHtml(log.formatted_time || 'Unknown');
+            const actionText = escapeHtml(String(log.action || 'unknown').toUpperCase());
+            const deviceName = escapeHtml(log.device || 'Unknown device');
+            const typeText = escapeHtml(log.type || 'manual');
+            const resultText = log.result
+                ? `${escapeHtml(log.result.substring(0, 150))}${log.result.length > 150 ? '...' : ''}`
+                : '';
             
             entry.innerHTML = `
                 <div class="d-flex justify-content-between align-items-start">
                     <div class="flex-grow-1">
-                        <span class="log-time">${log.formatted_time || 'Unknown'}</span>
-                        <span class="log-action ${actionClass}">${log.action.toUpperCase()}</span>
-                        <strong>${log.device}</strong>
-                        <span class="log-type ${typeClass}">${log.type || 'manual'}</span>
+                        <span class="log-time">${formattedTime}</span>
+                        <span class="log-action ${actionClass}">${actionText}</span>
+                        <strong>${deviceName}</strong>
+                        <span class="log-type ${typeClass}">${typeText}</span>
                     </div>
                 </div>
-                ${log.result ? `<div class="text-muted small mt-1">${log.result.substring(0, 150)}${log.result.length > 150 ? '...' : ''}</div>` : ''}
+                ${log.result ? `<div class="text-muted small mt-1">${resultText}</div>` : ''}
             `;
             
             container.appendChild(entry);
@@ -508,17 +594,22 @@ async function loadSchedules() {
             const days = schedule.days || [];
             const daysStr = days.map(d => daysNames[d]).join(', ') || 'None';
             const statusIcon = schedule.enabled !== false ? '✅' : '❌';
+            const escapedTaskId = escapeInlineHandlerArg(taskId);
+            const deviceName = escapeHtml(schedule.device || 'Unknown device');
+            const scheduleTime = escapeHtml(schedule.time || 'Unknown time');
+            const actionText = escapeHtml(String(schedule.action || 'unknown').toUpperCase());
+            const daysText = escapeHtml(daysStr);
             
             item.innerHTML = `
                 <div class="d-flex justify-content-between align-items-start">
                     <div class="flex-grow-1">
-                        <h6>${statusIcon} ${schedule.device} - ${schedule.time}</h6>
+                        <h6>${statusIcon} ${deviceName} - ${scheduleTime}</h6>
                         <div class="small text-muted">
-                            <span class="badge bg-primary">${schedule.action.toUpperCase()}</span>
-                            <span class="ms-2">Days: ${daysStr}</span>
+                            <span class="badge bg-primary">${actionText}</span>
+                            <span class="ms-2">Days: ${daysText}</span>
                         </div>
                     </div>
-                    <button class="btn btn-sm btn-outline-danger" onclick="deleteSchedule('${taskId}')">
+                    <button class="btn btn-sm btn-outline-danger" onclick="deleteSchedule('${escapedTaskId}')">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
@@ -555,18 +646,23 @@ async function loadAutoRestart() {
             item.className = 'auto-restart-item';
             
             const lastRun = settings.last_run ? new Date(settings.last_run * 1000).toLocaleString() : 'Never';
+            const escapedDeviceName = escapeHtml(deviceName);
+            const handlerDeviceName = escapeInlineHandlerArg(deviceName);
+            const intervalText = escapeHtml(settings.interval_hours);
+            const delayText = escapeHtml(settings.delay_seconds);
+            const lastRunText = escapeHtml(lastRun);
             
             item.innerHTML = `
                 <div class="d-flex justify-content-between align-items-start">
                     <div class="flex-grow-1">
-                        <h6>✅ ${deviceName}</h6>
+                        <h6>✅ ${escapedDeviceName}</h6>
                         <div class="small text-muted">
-                            <span>Interval: ${settings.interval_hours} hours</span>
-                            <span class="ms-3">Delay: ${settings.delay_seconds}s</span>
-                            <span class="ms-3">Last run: ${lastRun}</span>
+                            <span>Interval: ${intervalText} hours</span>
+                            <span class="ms-3">Delay: ${delayText}s</span>
+                            <span class="ms-3">Last run: ${lastRunText}</span>
                         </div>
                     </div>
-                    <button class="btn btn-sm btn-outline-danger" onclick="disableAutoRestart('${deviceName}')">
+                    <button class="btn btn-sm btn-outline-danger" onclick="disableAutoRestart('${handlerDeviceName}')">
                         <i class="bi bi-x-circle"></i> Disable
                     </button>
                 </div>
@@ -609,7 +705,7 @@ async function submitAddSchedule() {
     try {
         const response = await fetch(`${API_BASE}/schedules`, {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ device, action, time, days })
         });
         
@@ -633,8 +729,9 @@ async function deleteSchedule(taskId) {
     if (!confirm('Delete this schedule?')) return;
     
     try {
-        const response = await fetch(`${API_BASE}/schedules/${taskId}`, {
-            method: 'DELETE'
+        const response = await fetch(buildApiUrl(['schedules', taskId]), {
+            method: 'DELETE',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
@@ -678,9 +775,9 @@ async function submitAutoRestart() {
     }
     
     try {
-        const response = await fetch(`${API_BASE}/auto-restart/${device}`, {
+        const response = await fetch(buildApiUrl(['auto-restart', device]), {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: withCsrfHeaders({ 'Content-Type': 'application/json' }),
             body: JSON.stringify({ interval_hours: interval })
         });
         
@@ -704,8 +801,9 @@ async function disableAutoRestart(deviceName) {
     if (!confirm(`Disable auto restart for ${deviceName}?`)) return;
     
     try {
-        const response = await fetch(`${API_BASE}/auto-restart/${deviceName}`, {
-            method: 'DELETE'
+        const response = await fetch(buildApiUrl(['auto-restart', deviceName]), {
+            method: 'DELETE',
+            headers: withCsrfHeaders()
         });
         const data = await response.json();
         
