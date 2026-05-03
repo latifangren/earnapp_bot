@@ -12,6 +12,16 @@ if [ ! -f "earnapp_bot.py" ]; then
     exit 1
 fi
 
+if [ ! -d "earnapp" ]; then
+    echo "❌ Folder package earnapp tidak ditemukan!"
+    echo "Pastikan source code lengkap dan folder earnapp/ ada di direktori ini."
+    exit 1
+fi
+
+if [ ! -d "webui" ]; then
+    echo "⚠️  Folder webui tidak ditemukan, instalasi Web UI mandiri akan dilewati."
+fi
+
 # Update sistem
 echo "📦 Mengupdate sistem..."
 apt update && apt upgrade -y
@@ -33,6 +43,22 @@ echo "📋 Menyalin file bot..."
 cp earnapp_bot.py /srv/earnapp_bot/
 cp requirements.txt /srv/earnapp_bot/
 cp config.example.json /srv/earnapp_bot/
+rm -rf /srv/earnapp_bot/earnapp
+cp -r earnapp /srv/earnapp_bot/
+cp -r docs /srv/earnapp_bot/ 2>/dev/null || true
+if [ -d "webui" ]; then
+    rm -rf /srv/earnapp_bot/webui
+    mkdir -p /srv/earnapp_bot/webui
+    cp webui/app.py /srv/earnapp_bot/webui/
+    cp webui/requirements.txt /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp webui/README.md /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp webui/SYNC_INFO.md /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp webui/install.sh /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp webui/uninstall.sh /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp webui/run.sh /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp -r webui/templates /srv/earnapp_bot/webui/ 2>/dev/null || true
+    cp -r webui/static /srv/earnapp_bot/webui/ 2>/dev/null || true
+fi
 cp *.md /srv/earnapp_bot/ 2>/dev/null || true
 cp *.sh /srv/earnapp_bot/ 2>/dev/null || true
 cp LICENSE /srv/earnapp_bot/ 2>/dev/null || true

@@ -114,8 +114,11 @@ sudo apt install -y python3 python3-pip python3-venv libffi-dev libssl-dev
 sudo mkdir -p /srv/earnapp_bot
 cd /srv/earnapp_bot
 
-# Clone repository
-sudo git clone https://github.com/latifangren/earnapp_bot.git
+# Clone repository langsung ke /srv/earnapp_bot
+sudo git clone https://github.com/latifangren/earnapp_bot.git .
+
+# Pastikan ownership benar setelah clone
+sudo chown -R $USER:$USER /srv/earnapp_bot
 
 # Buat virtual environment
 python3 -m venv venv
@@ -265,6 +268,10 @@ Gunakan tombol menu untuk:
 
 ```
 earnapp_bot/
+├── earnapp/                # Package core hasil refactor bertahap
+│   └── core/               # Runtime path, storage, dan error seam
+├── webui/                  # Flask Web UI, template, dan static assets
+├── docs/                   # Dokumen arsitektur dan planning refactor
 ├── earnapp_bot.py          # Script utama bot
 ├── config.json             # Konfigurasi bot token & admin ID
 ├── devices.json            # Database device SSH
