@@ -11,6 +11,12 @@ import threading
 from earnapp.core.executors import AdbExecutor, LocalExecutor, SshExecutor
 from earnapp.core.storage import JsonStorage
 from earnapp.core.use_cases import (
+    add_device as add_device_use_case,
+    clear_activity_log as clear_activity_log_use_case,
+    delete_device as delete_device_use_case,
+    add_schedule as add_schedule_use_case,
+    delete_schedule as delete_schedule_use_case,
+    disable_auto_restart as disable_auto_restart_use_case,
     format_adb_result as format_adb_result_use_case,
     get_adb_app_status as get_adb_app_status_use_case,
     get_all_device_statuses as get_all_device_statuses_use_case,
@@ -18,7 +24,10 @@ from earnapp.core.use_cases import (
     get_device_id as get_device_id_use_case,
     get_ssh_earnapp_status as get_ssh_earnapp_status_use_case,
     record_activity as record_activity_use_case,
+    restart_all_devices as restart_all_devices_use_case,
+    restart_device as restart_device_use_case,
     run_device_command_by_name as run_device_command_by_name_use_case,
+    set_auto_restart as set_auto_restart_use_case,
     start_all_devices as start_all_devices_use_case,
     start_device as start_device_use_case,
     stop_all_devices as stop_all_devices_use_case,
@@ -41,10 +50,43 @@ def load_config():
 
 config = load_config()
 TOKEN = config.get("bot_token")
-ADMIN_ID = config.get("admin_telegram_id")
+raw_admin_telegram_id = config.get("admin_telegram_id")
+
+
+def validate_admin_telegram_id(admin_telegram_id):
+    admin_text = "" if admin_telegram_id is None else str(admin_telegram_id).strip()
+    if not admin_text:
+        return None
+
+    invalid_placeholders = {
+        "YOUR_TELEGRAM_ID_HERE",
+        "YOUR_TELEGRAM_ID",
+        "123456789",
+        "1234567890",
+    }
+    if admin_text in invalid_placeholders:
+        return None
+
+    try:
+        admin_id = int(admin_text)
+    except (TypeError, ValueError):
+        return None
+
+    if admin_id <= 0:
+        return None
+
+    return str(admin_id)
+
+
+ADMIN_ID = validate_admin_telegram_id(raw_admin_telegram_id)
 
 if not TOKEN:
     print("❌ Bot token tidak ditemukan di config.json!")
+    exit(1)
+
+if not ADMIN_ID:
+    print("❌ admin_telegram_id tidak valid di config.json!")
+    print("📝 Gunakan nilai numeric Telegram ID yang valid, bukan placeholder.")
     exit(1)
 
 bot = telebot.TeleBot(TOKEN)
@@ -67,7 +109,10 @@ else:
     # Device default: lokal
     devices = storage.load_devices()
     # Simpan file devices.json default
-    storage.save_devices(devices)
+    def write_default_devices(_devices):
+        return True
+
+    storage.update_json("devices.json", devices, write_default_devices)
 
 # Menyimpan device yang dipilih tiap chat_id
 user_device = {}
@@ -212,6 +257,40 @@ def is_known_device_message(message):
     refresh_devices()
     return message.text in devices
 
+
+def is_admin_user(user_id):
+    return str(user_id) == ADMIN_ID
+
+
+def is_admin_message(message):
+    return bool(message and getattr(message, "from_user", None) and is_admin_user(message.from_user.id))
+
+
+def is_admin_call(call):
+    return bool(call and getattr(call, "from_user", None) and is_admin_user(call.from_user.id))
+
+
+def deny_non_admin_message(message, response="❌ Anda tidak memiliki akses ke bot ini."):
+    bot.reply_to(message, response)
+
+
+def deny_non_admin_call(call, response="❌ Anda tidak memiliki akses ke bot ini."):
+    bot.answer_callback_query(call.id, response)
+
+
+def require_admin_message(message):
+    if not is_admin_message(message):
+        deny_non_admin_message(message)
+        return False
+    return True
+
+
+def require_admin_call(call):
+    if not is_admin_call(call):
+        deny_non_admin_call(call)
+        return False
+    return True
+
 # -----------------------
 # Fungsi menjalankan perintah
 # -----------------------
@@ -260,6 +339,14 @@ def start_earnapp_device(device_name):
 def stop_earnapp_device(device_name):
     """Stop EarnApp di device tertentu (otomatis deteksi tipe)"""
     return stop_device_use_case(storage, device_name, log_activity=False).get("result", "")
+
+def restart_earnapp_device(device_name, user="admin", log_activity=True):
+    """Restart EarnApp di device tertentu (otomatis deteksi tipe)."""
+    return restart_device_use_case(storage, device_name, user=user, log_activity=log_activity).get("result", "")
+
+def restart_earnapp_device_for_worker(device_name):
+    """Worker records auto/scheduled activity itself; avoid duplicate manual logs."""
+    return restart_earnapp_device(device_name, user="system", log_activity=False)
 
 def check_device_health(device_name):
     """Cek kesehatan device"""
@@ -381,8 +468,7 @@ def show_device_menu(chat_id):
 @bot.message_handler(commands=['start'])
 def start_cmd(msg):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(msg.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(msg, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(msg):
         return
     
     bot.reply_to(msg, "🤖 Bot EarnApp aktif! Pilih device yang ingin dikontrol.")
@@ -392,8 +478,7 @@ def start_cmd(msg):
 @bot.message_handler(func=is_known_device_message)
 def select_device(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -426,8 +511,7 @@ def select_device(m):
 @bot.message_handler(func=lambda m: m.text == "➕ Add Device")
 def add_device_start(msg):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(msg.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(msg, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(msg):
         return
         
     chat_id = msg.chat.id
@@ -445,8 +529,7 @@ def add_device_start(msg):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("add_device_type:"))
 def add_device_type_callback(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     device_type = call.data.split(":")[1]
@@ -469,8 +552,7 @@ def add_device_type_callback(call):
 @bot.message_handler(func=lambda m: m.chat.id in add_device_state)
 def add_device_process(msg):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(msg.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(msg, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(msg):
         add_device_state.pop(msg.chat.id, None)
         return
         
@@ -509,16 +591,17 @@ def add_device_process(msg):
                     bot.send_message(chat_id, "❌ Port tidak valid. Masukkan angka atau tekan Enter untuk default (5555):")
                     return
             
-            # Simpan device ADB
             data = state["data"]
-            refresh_devices()
-            devices[data["name"]] = {
+            result = add_device_use_case(storage, {
+                "name": data["name"],
                 "type": "adb",
                 "host": data["host"],
-                "port": port
-            }
-            # simpan ke file JSON
-            storage.save_devices(devices)
+                "port": port,
+            })
+            if not result.get("success"):
+                bot.send_message(chat_id, "❌ {0}".format(result.get("message", "Device gagal ditambahkan")))
+                return
+            refresh_devices()
             bot.send_message(chat_id, f"✅ Device ADB '{data['name']}' berhasil ditambahkan!\n\nIP: {data['host']}\nPort: {port}")
             add_device_state.pop(chat_id)
             show_main_menu(chat_id)
@@ -531,16 +614,18 @@ def add_device_process(msg):
         # Password SSH (hanya untuk SSH)
         state["data"]["password"] = msg.text
         data = state["data"]
-        refresh_devices()
-        devices[data["name"]] = {
+        result = add_device_use_case(storage, {
+            "name": data["name"],
             "type": "ssh",
             "host": data["host"],
             "port": 22,
             "user": data["user"],
-            "password": data["password"]
-        }
-        # simpan ke file JSON
-        storage.save_devices(devices)
+            "password": data["password"],
+        })
+        if not result.get("success"):
+            bot.send_message(chat_id, "❌ {0}".format(result.get("message", "Device gagal ditambahkan")))
+            return
+        refresh_devices()
         bot.send_message(chat_id, f"✅ Device SSH '{data['name']}' berhasil ditambahkan!")
         add_device_state.pop(chat_id)
         show_main_menu(chat_id)
@@ -549,8 +634,7 @@ def add_device_process(msg):
 @bot.message_handler(func=lambda m: m.text == "🟡 Status")
 def handler_status(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -579,8 +663,7 @@ def handler_status(m):
 @bot.message_handler(func=lambda m: m.text == "🟢 Start EarnApp")
 def handler_start(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -590,17 +673,7 @@ def handler_start(m):
         bot.reply_to(m, f"❌ Device '{device_name}' tidak ditemukan.")
         return
     
-    dev = devices[device_name]
-    
-    # Cek tipe device dan jalankan command sesuai
-    if dev.get("type") == "adb":
-        # Gunakan helper function yang sudah format output
-        status_out = start_earnapp_device(device_name)
-    else:
-        # Gunakan command earnapp untuk SSH/local
-        run_cmd_device(m.chat.id, "earnapp start")
-        out = run_cmd_device(m.chat.id, "earnapp status")
-        status_out = out
+    status_out = start_earnapp_device(device_name)
     
     # Log activity
     log_activity(device_name, "start", status_out, "manual", str(m.from_user.id))
@@ -624,8 +697,7 @@ def handler_start(m):
 @bot.message_handler(func=lambda m: m.text == "🔴 Stop EarnApp")
 def handler_stop(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -635,17 +707,7 @@ def handler_stop(m):
         bot.reply_to(m, f"❌ Device '{device_name}' tidak ditemukan.")
         return
     
-    dev = devices[device_name]
-    
-    # Cek tipe device dan jalankan command sesuai
-    if dev.get("type") == "adb":
-        # Gunakan helper function yang sudah format output
-        status_out = stop_earnapp_device(device_name)
-    else:
-        # Gunakan command earnapp untuk SSH/local
-        run_cmd_device(m.chat.id, "earnapp stop")
-        out = run_cmd_device(m.chat.id, "earnapp status")
-        status_out = out
+    status_out = stop_earnapp_device(device_name)
     
     # Log activity
     log_activity(device_name, "stop", status_out, "manual", str(m.from_user.id))
@@ -668,8 +730,7 @@ def handler_stop(m):
 
 @bot.message_handler(func=lambda m: m.text == "🆔 Show ID")
 def handler_showid(m):
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     dev_name = user_device.get(m.chat.id)
@@ -687,8 +748,7 @@ def handler_showid(m):
 @bot.message_handler(func=lambda m: m.text == "💣 Uninstall")
 def handler_uninstall(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     # Konfirmasi uninstall
@@ -703,8 +763,7 @@ def handler_uninstall(m):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_uninstall")
 def confirm_uninstall(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "🔄 Memproses uninstall...")
@@ -722,6 +781,9 @@ def confirm_uninstall(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_uninstall")
 def cancel_uninstall(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "❌ Uninstall dibatalkan")
     bot.edit_message_text(
         "❌ Uninstall dibatalkan.\n\nGunakan menu lain untuk mengontrol EarnApp.",
@@ -732,8 +794,7 @@ def cancel_uninstall(call):
 @bot.message_handler(func=lambda m: m.text == "🔄 Ganti Device")
 def handler_change_device(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -744,8 +805,7 @@ def handler_change_device(m):
 @bot.message_handler(func=lambda m: m.text == "📊 Status All")
 def handler_status_all(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     bot.reply_to(m, "🔄 Mengumpulkan status semua device...")
@@ -769,8 +829,7 @@ def handler_status_all(m):
 @bot.message_handler(func=lambda m: m.text == "🚀 Start All")
 def handler_start_all(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -808,8 +867,7 @@ def handler_start_all(m):
 @bot.message_handler(func=lambda m: m.text == "🛑 Stop All")
 def handler_stop_all(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     # Konfirmasi stop all
@@ -824,8 +882,7 @@ def handler_stop_all(m):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_stop_all")
 def confirm_stop_all(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -861,6 +918,9 @@ def confirm_stop_all(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_stop_all")
 def cancel_stop_all(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "❌ Stop all dibatalkan")
     bot.edit_message_text("❌ Stop all dibatalkan.", call.message.chat.id, call.message.message_id)
 
@@ -869,8 +929,7 @@ def cancel_stop_all(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("confirm_remove:"))
 def confirm_remove_device(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     device_name = call.data.split(":", 1)[1]
@@ -886,12 +945,15 @@ def confirm_remove_device(call):
 
     # Hapus device dari konfigurasi
     try:
-        del devices[device_name]
-        storage.save_devices(devices)
-        try:
-            os.chmod(DEVICE_FILE, 0o600)
-        except Exception:
-            pass
+        payload, status_code = delete_device_use_case(storage, device_name)
+        if status_code != 200:
+            bot.answer_callback_query(call.id, "❌ Gagal menghapus device")
+            bot.edit_message_text(payload.get("message", "❌ Device tidak ditemukan"), call.message.chat.id, call.message.message_id)
+            remove_device_state.pop(call.message.chat.id, None)
+            return
+        refresh_devices()
+        refresh_schedules()
+        refresh_auto_restart_settings()
 
         # Hapus referensi di user_device
         to_remove = [k for k, v in user_device.items() if v == device_name]
@@ -909,6 +971,9 @@ def confirm_remove_device(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_remove")
 def cancel_remove(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "❌ Hapus device dibatalkan")
     try:
         bot.edit_message_text("❌ Hapus device dibatalkan.", call.message.chat.id, call.message.message_id)
@@ -920,8 +985,7 @@ def cancel_remove(call):
 @bot.message_handler(func=lambda m: m.text == "🔍 Health Check")
 def handler_health_check(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -946,8 +1010,7 @@ def handler_health_check(m):
 @bot.message_handler(func=lambda m: m.text == "🗑️ Remove Device")
 def handler_remove_device(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_devices()
@@ -961,8 +1024,7 @@ def handler_remove_device(m):
 @bot.message_handler(func=lambda m: m.text == "⚡ Quick Actions")
 def handler_quick_actions(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     # Tampilkan menu quick actions
@@ -985,8 +1047,7 @@ def handler_quick_actions(m):
 @bot.callback_query_handler(func=lambda call: call.data == "quick_restart")
 def quick_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1019,8 +1080,7 @@ def quick_restart(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("quick_restart_device:"))
 def quick_restart_device(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     device_name = call.data.split(":", 1)[1]
@@ -1037,13 +1097,8 @@ def quick_restart_device(call):
         parse_mode="Markdown"
     )
     
-    # Jalankan stop → wait → start
-    stop_result = _text_result(stop_earnapp_device(device_name))
-    time.sleep(5)
-    start_result = _text_result(start_earnapp_device(device_name))
-    
-    # Log activity
-    log_activity(device_name, "restart", f"Stop: {stop_result[:200]}\nStart: {start_result[:200]}", "manual", str(call.from_user.id))
+    restart_payload = restart_device_use_case(storage, device_name, user=str(call.from_user.id))
+    restart_result = _text_result(restart_payload.get("result", ""))
     
     # Kirim notifikasi ke admin
     if ADMIN_ID:
@@ -1053,8 +1108,7 @@ def quick_restart_device(call):
                 f"🔄 *QUICK RESTART*\n\n"
                 f"Device: **{device_name}**\n"
                 f"User: {call.from_user.first_name} (@{call.from_user.username or 'N/A'})\n\n"
-                f"**Stop Result:**\n```\n{stop_result}\n```\n\n"
-                f"**Start Result:**\n```\n{start_result}\n```",
+                f"**Result:**\n```\n{restart_result}\n```",
                 parse_mode="Markdown"
             )
         except Exception as e:
@@ -1062,8 +1116,7 @@ def quick_restart_device(call):
     
     bot.edit_message_text(
         f"✅ *QUICK RESTART SELESAI*\n\nDevice: **{device_name}**\n\n"
-        f"**Stop Result:**\n```\n{stop_result}\n```\n\n"
-        f"**Start Result:**\n```\n{start_result}\n```",
+        f"**Result:**\n```\n{restart_result}\n```",
         call.message.chat.id,
         call.message.message_id,
         parse_mode="Markdown"
@@ -1072,8 +1125,7 @@ def quick_restart_device(call):
 @bot.callback_query_handler(func=lambda call: call.data == "quick_restart_all")
 def quick_restart_all(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1087,12 +1139,12 @@ def quick_restart_all(call):
         parse_mode="Markdown"
     )
     
+    restart_payload = restart_all_devices_use_case(storage, user=str(call.from_user.id))
     results = []
-    for device_name in devices.keys():
-        stop_result = _text_result(stop_earnapp_device(device_name))
-        time.sleep(5)
-        start_result = _text_result(start_earnapp_device(device_name))
-        results.append(f"**{device_name}**\nStop: {stop_result[:50]}...\nStart: {start_result[:50]}...")
+    for item in restart_payload.get("results", []):
+        device_name = item.get("device", "Unknown")
+        restart_result = _text_result(item.get("result", ""))
+        results.append(f"**{device_name}**\n{restart_result[:120]}...")
     
     message = "✅ *QUICK RESTART ALL SELESAI*\n\n" + "\n\n".join(results)
     bot.edit_message_text(message, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
@@ -1114,8 +1166,7 @@ def quick_restart_all(call):
 @bot.callback_query_handler(func=lambda call: call.data == "quick_status")
 def quick_status(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1129,12 +1180,14 @@ def quick_status(call):
         parse_mode="Markdown"
     )
     
+    statuses = get_all_device_statuses_use_case(storage).get("devices", [])
     results = []
-    for device_name in devices.keys():
-        status = run_cmd_device_by_name(device_name, "earnapp status")
-        is_running = "running" in status.lower()
-        icon = "🟢" if is_running else "🔴"
-        results.append(f"{icon} **{device_name}**: {'Running' if is_running else 'Stopped'}\n```\n{status[:100]}\n```")
+    for status in statuses:
+        device_name = status.get("name", "Unknown")
+        icon = status.get("status_icon", "⚠️")
+        earnapp_status = status.get("earnapp_status", "Unknown")
+        health = status.get("health", "unknown")
+        results.append(f"{icon} **{device_name}**: {earnapp_status}\nHealth: {health}")
     
     message = "📊 *QUICK STATUS ALL DEVICES*\n\n" + "\n\n".join(results)
     bot.edit_message_text(message, call.message.chat.id, call.message.message_id, parse_mode="Markdown")
@@ -1142,8 +1195,7 @@ def quick_status(call):
 @bot.callback_query_handler(func=lambda call: call.data == "enable_auto_restart_all")
 def enable_auto_restart_all(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1153,21 +1205,11 @@ def enable_auto_restart_all(call):
     
     enabled_count = 0
     for device_name in devices.keys():
-        if device_name not in auto_restart_settings:
-            # Buat default settings jika belum ada
-            auto_restart_settings[device_name] = {
-                "enabled": True,
-                "interval_hours": 6,
-                "delay_seconds": 5,
-                "last_run": int(time.time())
-            }
-            enabled_count += 1
-        elif not auto_restart_settings[device_name].get("enabled", False):
-            auto_restart_settings[device_name]["enabled"] = True
-            enabled_count += 1
-    
-    # Simpan ke file
-    storage.save_auto_restart(auto_restart_settings)
+        if not auto_restart_settings.get(device_name, {}).get("enabled", False):
+            payload, status_code = set_auto_restart_use_case(storage, device_name, {"interval_hours": 6})
+            if status_code == 200 and payload.get("success"):
+                enabled_count += 1
+    refresh_auto_restart_settings()
     
     bot.edit_message_text(
         f"✅ *ENABLE AUTO RESTART ALL*\n\nBerhasil mengaktifkan auto restart untuk {enabled_count} device.",
@@ -1179,8 +1221,7 @@ def enable_auto_restart_all(call):
 @bot.callback_query_handler(func=lambda call: call.data == "disable_auto_restart_all")
 def disable_auto_restart_all(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1191,11 +1232,10 @@ def disable_auto_restart_all(call):
     disabled_count = 0
     for device_name in devices.keys():
         if device_name in auto_restart_settings and auto_restart_settings[device_name].get("enabled", False):
-            auto_restart_settings[device_name]["enabled"] = False
-            disabled_count += 1
-    
-    # Simpan ke file
-    storage.save_auto_restart(auto_restart_settings)
+            payload, status_code = disable_auto_restart_use_case(storage, device_name)
+            if status_code == 200 and payload.get("success"):
+                disabled_count += 1
+    refresh_auto_restart_settings()
     
     bot.edit_message_text(
         f"❌ *DISABLE AUTO RESTART ALL*\n\nBerhasil menonaktifkan auto restart untuk {disabled_count} device.",
@@ -1207,8 +1247,7 @@ def disable_auto_restart_all(call):
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_quick_actions")
 def back_to_quick_actions(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "🔙 Kembali")
@@ -1236,6 +1275,9 @@ def back_to_quick_actions(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_main")
 def back_to_main(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "🔙 Kembali ke menu utama")
     show_main_menu(call.message.chat.id)
 
@@ -1243,8 +1285,7 @@ def back_to_main(call):
 @bot.message_handler(func=lambda m: m.text == "⏰ Schedule")
 def handler_schedule(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_schedules()
@@ -1267,8 +1308,7 @@ def handler_schedule(m):
 @bot.message_handler(func=lambda m: m.text == "🗑️ Uninstall Bot")
 def handler_uninstall_bot_button(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     # Konfirmasi uninstall bot
@@ -1284,8 +1324,7 @@ def handler_uninstall_bot_button(m):
 @bot.message_handler(commands=['uninstallbot'])
 def handler_uninstall_bot(msg):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(msg.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(msg, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(msg):
         return
     
     # Konfirmasi uninstall bot
@@ -1300,8 +1339,7 @@ def handler_uninstall_bot(msg):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_uninstall_bot")
 def confirm_uninstall_bot(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "🔄 Memproses uninstall bot...")
@@ -1329,6 +1367,9 @@ def confirm_uninstall_bot(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_uninstall_bot")
 def cancel_uninstall_bot(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "❌ Uninstall bot dibatalkan")
     bot.edit_message_text(
         "❌ Uninstall bot dibatalkan.\n\nBot tetap aktif dan siap digunakan.",
@@ -1340,8 +1381,7 @@ def cancel_uninstall_bot(call):
 @bot.callback_query_handler(func=lambda call: call.data == "auto_restart_menu")
 def auto_restart_menu(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_auto_restart_settings()
@@ -1370,8 +1410,7 @@ def auto_restart_menu(call):
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_schedule")
 def back_to_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_schedules()
@@ -1402,8 +1441,7 @@ def back_to_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data == "time_schedule_menu")
 def time_schedule_menu(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_schedules()
@@ -1431,8 +1469,7 @@ def time_schedule_menu(call):
 @bot.callback_query_handler(func=lambda call: call.data == "add_time_schedule")
 def add_time_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1468,8 +1505,7 @@ def add_time_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("time_schedule_device:"))
 def time_schedule_device(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     device_name = call.data.split(":", 1)[1]
@@ -1501,8 +1537,7 @@ def time_schedule_device(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("time_schedule_action:"))
 def time_schedule_action(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     action = call.data.split(":", 1)[1]
@@ -1528,8 +1563,7 @@ def time_schedule_action(call):
 @bot.message_handler(func=lambda m: m.chat.id in schedule_state and schedule_state[m.chat.id]["step"] == 3)
 def process_time_schedule_time(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         schedule_state.pop(m.chat.id, None)
         return
     
@@ -1572,8 +1606,7 @@ def process_time_schedule_time(m):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("time_schedule_days:"))
 def time_schedule_days(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     days_type = call.data.split(":", 1)[1]
@@ -1603,18 +1636,19 @@ def time_schedule_days(call):
         )
         return
     
-    # Simpan schedule
     schedule_state[chat_id]["data"]["days"] = days
-    schedule_state[chat_id]["data"]["enabled"] = True
-    schedule_state[chat_id]["data"]["timezone"] = "UTC"
-    
-    # Generate task_id
-    task_id = f"{schedule_state[chat_id]['data']['device']}_{schedule_state[chat_id]['data']['time']}_{schedule_state[chat_id]['data']['action']}"
+    result = add_schedule_use_case(storage, schedule_state[chat_id]["data"])
+    if not result.get("success"):
+        bot.answer_callback_query(call.id, "❌ Schedule gagal ditambahkan")
+        bot.edit_message_text(
+            "❌ {0}".format(result.get("message", "Schedule gagal ditambahkan")),
+            chat_id,
+            call.message.message_id,
+        )
+        return
+    task_id = str(result.get("task_id", ""))
     refresh_schedules()
-    scheduled_tasks[task_id] = schedule_state[chat_id]["data"].copy()
-    
-    # Simpan ke file
-    storage.save_schedules(scheduled_tasks)
+    task = scheduled_tasks.get(task_id, schedule_state[chat_id]["data"])
     
     # Hapus state
     schedule_state.pop(chat_id, None)
@@ -1623,9 +1657,9 @@ def time_schedule_days(call):
     bot.answer_callback_query(call.id, "✅ Schedule ditambahkan")
     bot.edit_message_text(
         f"✅ *TIME SCHEDULE DITAMBAHKAN*\n\n"
-        f"Device: **{scheduled_tasks[task_id]['device']}**\n"
-        f"Action: **{scheduled_tasks[task_id]['action'].upper()}**\n"
-        f"Waktu: **{scheduled_tasks[task_id]['time']}**\n"
+        f"Device: **{task['device']}**\n"
+        f"Action: **{task['action'].upper()}**\n"
+        f"Waktu: **{task['time']}**\n"
         f"Hari: **{days_str}**\n"
         f"Status: ✅ Aktif",
         chat_id,
@@ -1636,8 +1670,7 @@ def time_schedule_days(call):
 @bot.message_handler(func=lambda m: m.chat.id in schedule_state and schedule_state[m.chat.id]["step"] == 5)
 def process_time_schedule_days_manual(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         schedule_state.pop(m.chat.id, None)
         return
     
@@ -1650,16 +1683,13 @@ def process_time_schedule_days_manual(m):
             raise ValueError("Hari harus antara 0-6")
         
         schedule_state[m.chat.id]["data"]["days"] = days
-        schedule_state[m.chat.id]["data"]["enabled"] = True
-        schedule_state[m.chat.id]["data"]["timezone"] = "UTC"
-        
-        # Generate task_id
-        task_id = f"{schedule_state[m.chat.id]['data']['device']}_{schedule_state[m.chat.id]['data']['time']}_{schedule_state[m.chat.id]['data']['action']}"
+        result = add_schedule_use_case(storage, schedule_state[m.chat.id]["data"])
+        if not result.get("success"):
+            bot.reply_to(m, "❌ {0}".format(result.get("message", "Schedule gagal ditambahkan")))
+            return
+        task_id = str(result.get("task_id", ""))
         refresh_schedules()
-        scheduled_tasks[task_id] = schedule_state[m.chat.id]["data"].copy()
-        
-        # Simpan ke file
-        storage.save_schedules(scheduled_tasks)
+        task = scheduled_tasks.get(task_id, schedule_state[m.chat.id]["data"])
         
         # Hapus state
         schedule_state.pop(m.chat.id, None)
@@ -1668,9 +1698,9 @@ def process_time_schedule_days_manual(m):
         days_str = ", ".join([days_names[d] for d in days])
         
         bot.reply_to(m, f"✅ *TIME SCHEDULE DITAMBAHKAN*\n\n"
-                       f"Device: **{scheduled_tasks[task_id]['device']}**\n"
-                       f"Action: **{scheduled_tasks[task_id]['action'].upper()}**\n"
-                       f"Waktu: **{scheduled_tasks[task_id]['time']}**\n"
+                       f"Device: **{task['device']}**\n"
+                       f"Action: **{task['action'].upper()}**\n"
+                       f"Waktu: **{task['time']}**\n"
                        f"Hari: **{days_str}**\n"
                        f"Status: ✅ Aktif",
                  parse_mode="Markdown")
@@ -1680,8 +1710,7 @@ def process_time_schedule_days_manual(m):
 @bot.callback_query_handler(func=lambda call: call.data == "list_time_schedule")
 def list_time_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_schedules()
@@ -1712,8 +1741,7 @@ def list_time_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data == "delete_time_schedule")
 def delete_time_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_schedules()
@@ -1745,18 +1773,23 @@ def delete_time_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("delete_schedule_task:"))
 def delete_schedule_task(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     task_id = call.data.split(":", 1)[1]
     refresh_schedules()
     
     if task_id in scheduled_tasks:
-        del scheduled_tasks[task_id]
-        
-        # Simpan ke file
-        storage.save_schedules(scheduled_tasks)
+        payload, status_code = delete_schedule_use_case(storage, task_id)
+        if status_code != 200 or not payload.get("success"):
+            bot.answer_callback_query(call.id, "❌ Schedule gagal dihapus")
+            bot.edit_message_text(
+                "❌ {0}".format(payload.get("message", "Schedule gagal dihapus")),
+                call.message.chat.id,
+                call.message.message_id,
+            )
+            return
+        refresh_schedules()
         
         bot.answer_callback_query(call.id, "✅ Schedule dihapus")
         bot.edit_message_text(
@@ -1776,8 +1809,7 @@ def delete_schedule_task(call):
 @bot.callback_query_handler(func=lambda call: call.data == "set_auto_restart")
 def set_auto_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -1811,8 +1843,7 @@ def set_auto_restart(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("select_device_restart:"))
 def select_device_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     device_name = call.data.split(":", 1)[1]
@@ -1836,8 +1867,7 @@ def select_device_restart(call):
 @bot.message_handler(func=lambda m: m.chat.id in auto_restart_state and auto_restart_state[m.chat.id]["step"] == 1)
 def process_auto_restart_interval(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         auto_restart_state.pop(m.chat.id, None)
         return
     
@@ -1852,19 +1882,11 @@ def process_auto_restart_interval(m):
         
         state = auto_restart_state[m.chat.id]
         device_name = state["data"]["device"]
+        payload, status_code = set_auto_restart_use_case(storage, device_name, {"interval_hours": interval})
+        if status_code != 200 or not payload.get("success"):
+            bot.reply_to(m, "❌ {0}".format(payload.get("message", "Auto restart gagal diatur")))
+            return
         refresh_auto_restart_settings()
-        
-        # Simpan konfigurasi
-        # Setiap interval akan selalu: stop → tunggu 5 detik → start
-        auto_restart_settings[device_name] = {
-            "enabled": True,
-            "interval_hours": interval,
-            "delay_seconds": 5,  # Default delay 5 detik antara stop dan start
-            "last_run": int(time.time())
-        }
-        
-        # Simpan ke file
-        storage.save_auto_restart(auto_restart_settings)
         
         # Hapus state
         auto_restart_state.pop(m.chat.id, None)
@@ -1886,8 +1908,7 @@ def process_auto_restart_interval(m):
 @bot.callback_query_handler(func=lambda call: call.data == "list_auto_restart")
 def list_auto_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_auto_restart_settings()
@@ -1928,8 +1949,7 @@ def list_auto_restart(call):
 @bot.callback_query_handler(func=lambda call: call.data == "disable_auto_restart")
 def disable_auto_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_auto_restart_settings()
@@ -1963,18 +1983,23 @@ def disable_auto_restart(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("disable_device_restart:"))
 def disable_device_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     device_name = call.data.split(":", 1)[1]
     refresh_auto_restart_settings()
     
     if device_name in auto_restart_settings:
-        auto_restart_settings[device_name]["enabled"] = False
-        
-        # Simpan ke file
-        storage.save_auto_restart(auto_restart_settings)
+        payload, status_code = disable_auto_restart_use_case(storage, device_name)
+        if status_code != 200 or not payload.get("success"):
+            bot.answer_callback_query(call.id, "❌ Gagal menonaktifkan")
+            bot.edit_message_text(
+                "❌ {0}".format(payload.get("message", "Auto restart gagal dinonaktifkan")),
+                call.message.chat.id,
+                call.message.message_id,
+            )
+            return
+        refresh_auto_restart_settings()
         
         bot.answer_callback_query(call.id, f"✅ {device_name} dinonaktifkan")
         bot.edit_message_text(
@@ -1994,8 +2019,7 @@ def disable_device_restart(call):
 @bot.callback_query_handler(func=lambda call: call.data == "list_schedule")
 def list_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
 
     refresh_schedules()
@@ -2036,8 +2060,7 @@ def list_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data == "delete_schedule")
 def delete_schedule(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "📝 Fitur delete schedule akan segera tersedia")
@@ -2051,8 +2074,7 @@ def delete_schedule(call):
 @bot.callback_query_handler(func=lambda call: call.data == "schedule_settings")
 def schedule_settings(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     message = "⚙️ *SCHEDULE SETTINGS*\n\n"
@@ -2067,8 +2089,7 @@ def schedule_settings(call):
 @bot.message_handler(func=lambda m: m.text == "📝 Activity Log")
 def handler_activity_log(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
 
     refresh_activity_logs()
@@ -2094,8 +2115,7 @@ def handler_activity_log(m):
 @bot.callback_query_handler(func=lambda call: call.data == "view_activity_log")
 def view_activity_log(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_activity_logs()
@@ -2133,8 +2153,7 @@ def view_activity_log(call):
 @bot.callback_query_handler(func=lambda call: call.data == "filter_log_device")
 def filter_log_device(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_devices()
@@ -2168,8 +2187,7 @@ def filter_log_device(call):
 @bot.callback_query_handler(func=lambda call: call.data and call.data.startswith("view_log_device:"))
 def view_log_device(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     device_name = call.data.split(":", 1)[1]
@@ -2209,8 +2227,7 @@ def view_log_device(call):
 @bot.callback_query_handler(func=lambda call: call.data == "filter_log_date")
 def filter_log_date(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "📅 Filter by Date")
@@ -2226,8 +2243,7 @@ def filter_log_date(call):
 @bot.message_handler(func=lambda m: m.chat.id in filter_date_state)
 def process_filter_date(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         filter_date_state.pop(m.chat.id, None)
         return
 
@@ -2298,8 +2314,7 @@ def process_filter_date(m):
 @bot.callback_query_handler(func=lambda call: call.data == "export_log")
 def export_log(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_activity_logs()
@@ -2362,8 +2377,7 @@ def export_log(call):
 @bot.callback_query_handler(func=lambda call: call.data == "clear_log")
 def clear_log(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_activity_logs()
@@ -2386,16 +2400,12 @@ def clear_log(call):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_clear_log")
 def confirm_clear_log(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
     
-    refresh_activity_logs()
-    count = len(activity_logs)
+    payload = clear_activity_log_use_case(storage)
+    count = payload.get("count", 0)
     activity_logs[:] = []
-    
-    # Simpan ke file
-    storage.save_activity_log(activity_logs)
     
     bot.answer_callback_query(call.id, "✅ Log dihapus")
     bot.edit_message_text(
@@ -2408,8 +2418,7 @@ def confirm_clear_log(call):
 @bot.callback_query_handler(func=lambda call: call.data == "back_to_activity_log")
 def back_to_activity_log(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses")
+    if not require_admin_call(call):
         return
 
     refresh_activity_logs()
@@ -2442,8 +2451,7 @@ def back_to_activity_log(call):
 @bot.message_handler(func=lambda m: m.text == "🔄 Restart Bot")
 def handler_restart_bot(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
     
     # Konfirmasi restart
@@ -2458,8 +2466,7 @@ def handler_restart_bot(m):
 @bot.callback_query_handler(func=lambda call: call.data == "confirm_restart")
 def confirm_restart(call):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(call.from_user.id) != str(ADMIN_ID):
-        bot.answer_callback_query(call.id, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_call(call):
         return
     
     bot.answer_callback_query(call.id, "🔄 Memulai restart bot...")
@@ -2496,6 +2503,9 @@ def confirm_restart(call):
 
 @bot.callback_query_handler(func=lambda call: call.data == "cancel_restart")
 def cancel_restart(call):
+    if not require_admin_call(call):
+        return
+
     bot.answer_callback_query(call.id, "❌ Restart dibatalkan")
     bot.edit_message_text(
         "❌ Restart bot dibatalkan.",
@@ -2507,8 +2517,7 @@ def cancel_restart(call):
 @bot.message_handler(func=lambda m: True)
 def fallback(m):
     # Cek apakah user adalah admin
-    if ADMIN_ID and str(m.from_user.id) != str(ADMIN_ID):
-        bot.reply_to(m, "❌ Anda tidak memiliki akses ke bot ini.")
+    if not require_admin_message(m):
         return
         
     bot.reply_to(m, "Gunakan tombol menu untuk mengontrol EarnApp 👇")
@@ -2553,6 +2562,7 @@ if __name__ == "__main__":
         scheduled_tasks,
         start_device_fn=start_earnapp_device,
         stop_device_fn=stop_earnapp_device,
+        restart_device_fn=restart_earnapp_device_for_worker,
         record_activity_fn=log_activity,
     )
     
