@@ -92,6 +92,14 @@ class JsonStorage(object):
         with self._locked(filename, exclusive=True):
             self._write_json_unlocked(filename, data)
 
+    def update_json(self, filename, default, mutator):  # type: (str, Any, Any) -> Any
+        with self._locked(filename, exclusive=True):
+            data = self._read_json_unlocked(filename, default)
+            result = mutator(data)
+            if result is not False:
+                self._write_json_unlocked(filename, data)
+            return result
+
     def path_for(self, filename):  # type: (str) -> str
         return self.runtime_config.path_for(filename)
 

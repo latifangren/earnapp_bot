@@ -143,9 +143,22 @@ class LocalExecutor(object):
                 cwd=cwd,
                 stderr=self.subprocess.STDOUT,
                 universal_newlines=True,
+                timeout=timeout,
             )
             output = (output or "").strip()
             return CommandResult(stdout=output, stderr="", exit_code=0, success=True, message=output)
+        except self.subprocess.TimeoutExpired as exc:
+            raw_output = exc.output or ""
+            if isinstance(raw_output, bytes):
+                raw_output = raw_output.decode(errors="replace")
+            message = "❌ Command timeout setelah {0} detik".format(timeout)
+            return CommandResult(
+                stdout=(raw_output or "").strip(),
+                stderr="",
+                exit_code=124,
+                success=False,
+                message=message,
+            )
         except self.subprocess.CalledProcessError as exc:
             raw_output = exc.output or ""
             message = (raw_output or str(exc)).strip()
@@ -187,16 +200,22 @@ class SshExecutor(object):
                 password=self.password,
                 timeout=timeout,
             )
-            stdin, stdout, stderr = ssh.exec_command(cmd)
+            stdin, stdout, stderr = ssh.exec_command(cmd, timeout=timeout)
+            try:
+                stdout.channel.settimeout(timeout)
+                stderr.channel.settimeout(timeout)
+            except Exception:
+                pass
             out = _read_stream(stdout)
             err = _read_stream(stderr)
+            exit_code = stdout.channel.recv_exit_status()
             combined = _combine_output(out, err)
             return CommandResult(
                 stdout=(out or "").strip(),
                 stderr=(err or "").strip(),
-                exit_code=0,
-                success=True,
-                message=combined,
+                exit_code=exit_code,
+                success=exit_code == 0,
+                message=combined or "❌ SSH command failed with exit code {0}".format(exit_code),
                 extra={"combined_output": combined},
             )
         except Exception as exc:
